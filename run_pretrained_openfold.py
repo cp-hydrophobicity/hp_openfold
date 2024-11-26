@@ -50,6 +50,7 @@ from openfold.utils.trace_utils import (
     pad_feature_dict_seq,
     trace_model_,
 )
+from openfold.utils.custom_logging import save_array_to_npz, save_tensor_to_npz, WandBLogger
 
 from scripts.precompute_embeddings import EmbeddingGenerator
 from scripts.utils import add_data_args
@@ -65,7 +66,7 @@ def precompute_alignments(tags, seqs, alignment_dir, args):
             fp.write(f">{tag}\n{seq}")
 
         local_alignment_dir = os.path.join(alignment_dir, tag)
-
+        
         if args.use_precomputed_alignments is None:
             logger.info(f"Generating alignments for {tag}...")
 
@@ -176,6 +177,9 @@ def main(args):
     # Create the output directory
     os.makedirs(args.output_dir, exist_ok=True)
 
+    if args.wandb_project: 
+        wb_logger = WandBLogger(project_name = args.wandb_project, run_name: str, entity: str, config: dict = None)
+
     if args.config_preset.startswith("seq"):
         args.use_single_seq_mode = True
 
@@ -212,7 +216,7 @@ def main(args):
             release_dates_path=args.release_dates_path,
             obsolete_pdbs_path=args.obsolete_pdbs_path
         )
-    else:
+    elif "model_1" in args.config_preset or "model_2" in args.config_preset:
         template_featurizer = templates.HhsearchHitFeaturizer(
             mmcif_dir=args.template_mmcif_dir,
             max_template_date=args.max_template_date,
@@ -221,6 +225,8 @@ def main(args):
             release_dates_path=args.release_dates_path,
             obsolete_pdbs_path=args.obsolete_pdbs_path
         )
+    else:
+        template_featurizer = None
 
     data_processor = data_pipeline.DataPipeline(
         template_featurizer=template_featurizer,
@@ -474,6 +480,12 @@ if __name__ == "__main__":
     parser.add_argument(
         "--use_deepspeed_evoformer_attention", action="store_true", default=False, 
         help="Whether to use the DeepSpeed evoformer attention layer. Must have deepspeed installed in the environment.",
+    )
+    parser.add_argument(
+        "--wandb_project", type=str, default=None, help="WandB project to store logging metrics/intermediate dLDDT"
+    )
+    parser.add_argument(
+        "--wandb_entity", type=str, default=None, help="Relevant entity for WandB login."
     )
     add_data_args(parser)
     args = parser.parse_args()

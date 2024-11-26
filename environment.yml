@@ -6,7 +6,7 @@ channels:
   - nvidia 
 dependencies:
   - cuda
-  - gcc=12.4
+  - gcc
   - python=3.10
   - libgcc
   - setuptools=59.5.0
