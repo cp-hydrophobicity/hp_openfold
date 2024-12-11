@@ -44,6 +44,8 @@ def checkpoint_blocks(
     blocks: List[Callable],
     args: BLOCK_ARGS,
     blocks_per_ckpt: Optional[int],
+    im_outputs: bool = False,
+    compute_s = None
 ) -> BLOCK_ARGS:
     """
     Chunk a list of blocks and run each chunk with activation
@@ -86,11 +88,15 @@ def checkpoint_blocks(
     elif blocks_per_ckpt < 1 or blocks_per_ckpt > len(blocks):
         raise ValueError("blocks_per_ckpt must be between 1 and len(blocks)")
 
-    checkpoint = get_checkpoint_fn() 
+    checkpoint = get_checkpoint_fn()
 
+    intermed_args = []
     for s in range(0, len(blocks), blocks_per_ckpt):
         e = s + blocks_per_ckpt
         args = checkpoint(chunker(s, e), *args)
         args = wrap(args)
+        if im_outputs:
+            temp_args = (args[0], args[1], compute_s(args[0][..., 0, :, :]))
+            intermed_args.append(temp_args)
 
-    return args
+    return args#, intermed_args

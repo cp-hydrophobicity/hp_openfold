@@ -122,9 +122,8 @@ def parse_fasta(data):
         for prot in data.split('>') for l in prot.strip().split('\n', 1)
     ][1:]
     tags, seqs = lines[::2], lines[1::2]
-
-    tags = [re.split('\W| \|', t)[0] for t in tags]
-
+    # tags = [re.split('\W| \|', t)[0] for t in tags]
+    tags = [re.split(r'[ |\|]', t)[0] for t in tags]
     return tags, seqs
 
 
@@ -147,7 +146,7 @@ def update_timings(timing_dict, output_file=os.path.join(os.getcwd(), "timings.j
     return output_file
 
 
-def run_model(model, batch, tag, output_dir):
+def run_model(model, batch, tag, output_dir, logger, wb_logger):
     with torch.no_grad():
         # Temporarily disable templates if there aren't any in the batch
         template_enabled = model.config.template.enabled
@@ -157,7 +156,7 @@ def run_model(model, batch, tag, output_dir):
 
         logger.info(f"Running inference for {tag}...")
         t = time.perf_counter()
-        out = model(batch)
+        out = model(batch, wb_logger)
         inference_time = time.perf_counter() - t
         logger.info(f"Inference time: {inference_time}")
         update_timings({tag: {"inference": inference_time}}, os.path.join(output_dir, "timings.json"))

@@ -60,6 +60,7 @@ from openfold.utils.tensor_utils import (
     dict_multimap,
     tensor_tree_map,
 )
+from openfold.utils.custom_logging import WandBLogger
 
 
 class AlphaFold(nn.Module):
@@ -82,6 +83,7 @@ class AlphaFold(nn.Module):
         self.template_config = self.config.template
         self.extra_msa_config = self.config.extra_msa
         self.seqemb_mode = config.globals.seqemb_mode_enabled
+        # XXX/interstructs self.output_intermed_structs = config.globals.output_intermed_structs
 
         # Main trunk + structure module
         if self.globals.is_multimer:
@@ -200,13 +202,15 @@ class AlphaFold(nn.Module):
             return False
 
         ca_idx = residue_constants.atom_order['CA']
-        sq_diff = (distances(prev_pos[..., ca_idx, :]) - distances(next_pos[..., ca_idx, :])) ** 2
+        sq_diff = (distances(prev_pos[..., ca_idx, :]) -
+                   distances(next_pos[..., ca_idx, :])) ** 2
         mask = mask[..., None] * mask[..., None, :]
-        sq_diff = masked_mean(mask=mask, value=sq_diff, dim=list(range(len(mask.shape))))
+        sq_diff = masked_mean(mask=mask, value=sq_diff,
+                              dim=list(range(len(mask.shape))))
         diff = torch.sqrt(sq_diff + eps).item()
         return diff <= self.config.recycle_early_stop_tolerance
 
-    def iteration(self, feats, prevs, _recycle=True):
+    def iteration(self, feats, prevs, cycle_no, logger=None, _recycle=True):
         # Primary output dictionary
         outputs = {}
 
@@ -257,11 +261,11 @@ class AlphaFold(nn.Module):
                 inplace_safe=inplace_safe,
             )
 
-        # Unpack the recycling embeddings. Removing them from the list allows 
+        # Unpack the recycling embeddings. Removing them from the list allows
         # them to be freed further down in this function, saving memory
         m_1_prev, z_prev, x_prev = reversed([prevs.pop() for _ in range(3)])
 
-        # Initialize the recycling embeddings, if needs be 
+        # Initialize the recycling embeddings, if needs be
         if None in [m_1_prev, z_prev, x_prev]:
             # [*, N, C_m]
             m_1_prev = m.new_zeros(
@@ -404,7 +408,7 @@ class AlphaFold(nn.Module):
         # Run MSA + pair embeddings through the trunk of the network
         # m: [*, S, N, C_m]
         # z: [*, N, N, C_z]
-        # s: [*, N, C_s]          
+        # s: [*, N, C_s]
         if self.globals.offload_inference:
             input_tensors = [m, z]
             del m, z
@@ -416,10 +420,13 @@ class AlphaFold(nn.Module):
                 use_deepspeed_evo_attention=self.globals.use_deepspeed_evo_attention,
                 use_lma=self.globals.use_lma,
                 _mask_trans=self.config._mask_trans,
+                logger=logger,
+                cycle_no=cycle_no,
             )
 
             del input_tensors
         else:
+            # XXX/interstructs add im_outputs
             m, z, s = self.evoformer(
                 m,
                 z,
@@ -431,6 +438,9 @@ class AlphaFold(nn.Module):
                 use_flash=self.globals.use_flash,
                 inplace_safe=inplace_safe,
                 _mask_trans=self.config._mask_trans,
+                logger=logger,
+                cycle_no=cycle_no,
+                # output_intermed_structs=self.output_intermed_structs
             )
 
         outputs["msa"] = m[..., :n_seq, :, :]
@@ -438,6 +448,21 @@ class AlphaFold(nn.Module):
         outputs["single"] = s
 
         del z
+
+        # if not(self.globals.offload_inference) and self.output_intermed_structs:
+        #     s_outputs = {}
+        #     for i, m, z, s in enumerate(im_outputs):
+        #         s_outputs["msa"] = m[..., :n_seq, :, :]
+        #         s_outputs["pair"] = z
+        #         s_outputs["single"] = s
+        #         sm = self.structure_module(
+        #             s_outputs,
+        #             feats["aatype"],
+        #             mask=feats["seq_mask"].to(dtype=s.dtype),
+        #             inplace_safe=inplace_safe,
+        #             _offload_inference=self.globals.offload_inference,
+        #         )
+        #         logger.save_tensor_to_npz(sm, data_name=f"atom_positions_subcycle={i}", subdir_name=f"intermed_atom_positions_cycle={cycle_no}")
 
         # Predict 3D structure
         outputs["sm"] = self.structure_module(
@@ -463,7 +488,8 @@ class AlphaFold(nn.Module):
 
         early_stop = False
         if self.globals.is_multimer:
-            early_stop = self.tolerance_reached(x_prev, outputs["final_atom_positions"], seq_mask)
+            early_stop = self.tolerance_reached(
+                x_prev, outputs["final_atom_positions"], seq_mask)
 
         del x_prev
 
@@ -490,7 +516,7 @@ class AlphaFold(nn.Module):
         for b in self.extra_msa_stack.blocks:
             b.ckpt = self.config.extra_msa.extra_msa_stack.ckpt
 
-    def forward(self, batch):
+    def forward(self, batch, logger: WandBLogger = None):
         """
         Args:
             batch:
@@ -553,7 +579,7 @@ class AlphaFold(nn.Module):
         num_recycles = 0
         for cycle_no in range(num_iters):
             # Select the features for the current recycling cycle
-            fetch_cur_batch = lambda t: t[..., cycle_no]
+            def fetch_cur_batch(t): return t[..., cycle_no]
             feats = tensor_tree_map(fetch_cur_batch, batch)
 
             # Enable grad iff we're training and it's the final recycling layer
@@ -568,10 +594,19 @@ class AlphaFold(nn.Module):
                 outputs, m_1_prev, z_prev, x_prev, early_stop = self.iteration(
                     feats,
                     prevs,
-                    _recycle=(num_iters > 1)
+                    cycle_no,
+                    logger,
+                    _recycle=(num_iters > 1),
                 )
 
                 num_recycles += 1
+
+                log_out = self.aux_heads(outputs)
+                logger.log_metric(value=torch.mean(log_out["plddt"]), name="mean_plddt", step=cycle_no)
+                logger.save_tensor_to_npz(tensor=log_out["plddt"], data_name=f"plddt-cycle_{cycle_no}", subdir_name="plddt")
+                logger.save_tensor_to_npz(tensor=outputs["final_atom_positions"], data_name=f"final-atom-positions-cycle_{cycle_no}", subdir_name="final_atom_positions")
+                logger.save_tensor_to_npz(tensor=outputs["pair"], data_name=f"pair-cycle_{cycle_no}", subdir_name="pair_embed")
+                logger.save_tensor_to_npz(tensor=outputs["single"], data_name=f"single-cycle_{cycle_no}", subdir_name="single_embed")
 
                 if not is_final_iter:
                     del outputs
@@ -580,7 +615,8 @@ class AlphaFold(nn.Module):
                 else:
                     break
 
-        outputs["num_recycles"] = torch.tensor(num_recycles, device=feats["aatype"].device)
+        outputs["num_recycles"] = torch.tensor(
+            num_recycles, device=feats["aatype"].device)
 
         if "asym_id" in batch:
             outputs["asym_id"] = feats["asym_id"]

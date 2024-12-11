@@ -16,6 +16,8 @@
 import torch
 import torch.nn as nn
 
+from openfold.utils.custom_logging import WandBLogger
+
 from openfold.model.primitives import Linear, LayerNorm
 from openfold.utils.loss import (
     compute_plddt,
@@ -158,9 +160,9 @@ class DistogramHead(nn.Module):
         logits = self.linear(z)
         logits = logits + logits.transpose(-2, -3)
         return logits
-    
-    def forward(self, z): 
-        if(is_fp16_enabled()):
+
+    def forward(self, z):
+        if (is_fp16_enabled()):
             with torch.cuda.amp.autocast(enabled=False):
                 return self._forward(z.float())
         else:

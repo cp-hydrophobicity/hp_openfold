@@ -23,6 +23,7 @@ dependencies:
   - tqdm==4.62.2
   - typing-extensions
   - wandb
+  - pillow
   - modelcif==0.7
   - awscli
   - ml-collections

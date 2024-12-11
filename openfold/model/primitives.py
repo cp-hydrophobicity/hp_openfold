@@ -42,6 +42,7 @@ from openfold.utils.tensor_utils import (
     flatten_final_dims,
 )
 
+from openfold.utils.custom_logging import WandBLogger
 
 DEFAULT_LMA_Q_CHUNK_SIZE = 1024
 DEFAULT_LMA_KV_CHUNK_SIZE = 4096
@@ -264,7 +265,7 @@ def softmax_no_cast(t: torch.Tensor, dim: int = -1) -> torch.Tensor:
 
 
 #@torch.jit.script
-def _attention(query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, biases: List[torch.Tensor]) -> torch.Tensor:
+def _attention(query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, biases: List[torch.Tensor], logger: WandBLogger = None) -> torch.Tensor:
     # [*, H, C_hidden, K]
     key = permute_final_dims(key, (1, 0))
 
@@ -276,6 +277,10 @@ def _attention(query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, bias
 
     a = softmax_no_cast(a, -1)
 
+    # if logger:
+    #     step_no, drxn = logger.metadata["step_no"], logger.metadata["drxn"]
+    #     logger.save_tensor_to_npz(tensor=a, data_name=f"tri_attn-step_{step_no}_{drxn}", subdir_name="tri_attn")
+  
     # [*, H, Q, C_hidden]
     a = torch.matmul(a, value)
 
@@ -456,7 +461,8 @@ class Attention(nn.Module):
         lma_q_chunk_size: int = DEFAULT_LMA_Q_CHUNK_SIZE,
         lma_kv_chunk_size: int = DEFAULT_LMA_KV_CHUNK_SIZE,
         use_flash: bool = False,
-        flash_mask: Optional[torch.Tensor] = None
+        flash_mask: Optional[torch.Tensor] = None,
+        logger: WandBLogger = None,
     ) -> torch.Tensor:
         """
         Args:
@@ -539,7 +545,7 @@ class Attention(nn.Module):
         elif use_flash:
             o = _flash_attn(q, k, v, flash_mask)
         else:
-            o = _attention(q, k, v, biases)
+            o = _attention(q, k, v, biases) # TODO: Edit logger here. 
             o = o.transpose(-2, -3)
 
         o = self._wrap_up(o, q_x)
@@ -765,7 +771,7 @@ def _lma(
 
 
 @torch.jit.ignore
-def _flash_attn(q, k, v, kv_mask):
+def _flash_attn(q, k, v, kv_mask, logger: WandBLogger = None):
     if not fa_is_installed:
         raise ValueError(
             "_flash_attn requires that FlashAttention be installed"
@@ -810,7 +816,7 @@ def _flash_attn(q, k, v, kv_mask):
     
     kv_unpad, _, kv_cu_seqlens, kv_max_s = unpad_input(kv, kv_mask)
     kv_unpad = kv_unpad.reshape(-1, *kv_shape[-3:])
-   
+ 
     out = flash_attn_varlen_kvpacked_func(
         q,
         kv_unpad,
@@ -821,7 +827,7 @@ def _flash_attn(q, k, v, kv_mask):
         dropout_p=0.,
         softmax_scale=1.,  # q has been scaled already
     )
-  
+
     # [*, B, N, H, C]
     out = out.reshape(*batch_dims, n, no_heads, c) 
 

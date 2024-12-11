@@ -27,6 +27,7 @@ from openfold.utils.tensor_utils import (
     flatten_final_dims,
 )
 
+from openfold.utils.custom_logging import WandBLogger
 
 class TriangleAttention(nn.Module):
     def __init__(
@@ -95,6 +96,7 @@ class TriangleAttention(nn.Module):
         use_deepspeed_evo_attention: bool = False,
         use_lma: bool = False,
         inplace_safe: bool = False,
+        logger: WandBLogger = None,
     ) -> torch.Tensor:
         """
         Args:
@@ -144,7 +146,8 @@ class TriangleAttention(nn.Module):
                 biases=biases, 
                 use_memory_efficient_kernel=use_memory_efficient_kernel,
                 use_deepspeed_evo_attention=use_deepspeed_evo_attention,
-                use_lma=use_lma
+                use_lma=use_lma,
+                # logger=logger,
             )
 
         if(not self.starting):

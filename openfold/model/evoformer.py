@@ -44,6 +44,8 @@ from openfold.utils.checkpointing import checkpoint_blocks, get_checkpoint_fn
 from openfold.utils.chunk_utils import chunk_layer, ChunkSizeTuner
 from openfold.utils.tensor_utils import add
 
+from openfold.utils.custom_logging import WandBLogger
+
 
 class MSATransition(nn.Module):
     """
@@ -177,12 +179,15 @@ class PairStack(nn.Module):
     def forward(self,
         z: torch.Tensor,
         pair_mask: torch.Tensor,
+        step_no: int = None,
         chunk_size: Optional[int] = None,
         use_deepspeed_evo_attention: bool = False,
         use_lma: bool = False,
         inplace_safe: bool = False,
         _mask_trans: bool = True,
-        _attn_chunk_size: Optional[int] = None
+        _attn_chunk_size: Optional[int] = None,
+        logger: WandBLogger = None,
+        no_blocks: int = None,
     ) -> torch.Tensor:
         # DeepMind doesn't mask these transitions in the source, so _mask_trans
         # should be disabled to better approximate the exact activations of
@@ -218,9 +223,8 @@ class PairStack(nn.Module):
 
         del tmu_update
 
-        z = add(z,
-                self.ps_dropout_row_layer(
-                    self.tri_att_start(
+
+        tri_save = self.tri_att_start(
                         z,
                         mask=pair_mask,
                         chunk_size=_attn_chunk_size,
@@ -228,18 +232,22 @@ class PairStack(nn.Module):
                         use_deepspeed_evo_attention=use_deepspeed_evo_attention,
                         use_lma=use_lma,
                         inplace_safe=inplace_safe,
+                        logger=logger,
                     )
+        z = add(z,
+                self.ps_dropout_row_layer(
+                    tri_save
                 ),
                 inplace=inplace_safe,
                 )
 
         z = z.transpose(-2, -3)
+        tri_save = tri_save.transpose(-2, -3)
         if (inplace_safe):
             z = z.contiguous()
+            tri_save = tri_save.contiguous()
 
-        z = add(z,
-                self.ps_dropout_row_layer(
-                    self.tri_att_end(
+        tri_end = self.tri_att_end(
                         z,
                         mask=pair_mask.transpose(-1, -2),
                         chunk_size=_attn_chunk_size,
@@ -248,13 +256,24 @@ class PairStack(nn.Module):
                         use_lma=use_lma,
                         inplace_safe=inplace_safe,
                     )
+        tri_save = add(tri_save, tri_end, inplace=inplace_safe)
+
+        z = add(z,
+                self.ps_dropout_row_layer(
+                    tri_end
                 ),
                 inplace=inplace_safe,
                 )
 
+        tri_save = tri_save.transpose(-2, -3)
         z = z.transpose(-2, -3)
         if (inplace_safe):
             z = z.contiguous()
+            tri_save = tri_save.contiguous()
+
+        if (step_no is not None) and ((step_no % 8 == 0) or ((step_no + 1) % no_blocks == 0)):
+            logger.save_tensor_to_npz(tensor=tri_save, data_name=f"tri_attn-cycle_iter_{step_no}", subdir_name="tri_attn")
+        del tri_save, tri_end
 
         z = add(z,
                 self.pair_transition(
@@ -392,6 +411,7 @@ class EvoformerBlock(MSABlock):
         fuse_projection_weights: bool,
         inf: float,
         eps: float,
+        no_blocks: int,
     ):
         super(EvoformerBlock, self).__init__(c_m=c_m,
                                              c_z=c_z,
@@ -407,10 +427,12 @@ class EvoformerBlock(MSABlock):
                                              opm_first=opm_first,
                                              fuse_projection_weights=fuse_projection_weights,
                                              inf=inf,
-                                             eps=eps)
+                                             eps=eps
+                                             )
 
         # Specifically, seqemb mode does not use column attention
         self.no_column_attention = no_column_attention
+        self.no_blocks = no_blocks
 
         if not self.no_column_attention:
             self.msa_att_col = MSAColumnAttention(
@@ -425,6 +447,7 @@ class EvoformerBlock(MSABlock):
         z: Optional[torch.Tensor],
         msa_mask: torch.Tensor,
         pair_mask: torch.Tensor,
+        step_no: int,
         chunk_size: Optional[int] = None,
         use_deepspeed_evo_attention: bool = False,
         use_lma: bool = False,
@@ -434,6 +457,7 @@ class EvoformerBlock(MSABlock):
         _attn_chunk_size: Optional[int] = None,
         _offload_inference: bool = False,
         _offloadable_inputs: Optional[Sequence[torch.Tensor]] = None,
+        logger: WandBLogger = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
 
         msa_trans_mask = msa_mask if _mask_trans else None
@@ -482,18 +506,22 @@ class EvoformerBlock(MSABlock):
             m, z = input_tensors
 
         # Specifically, column attention is not used in seqemb mode.
-        if not self.no_column_attention:
-            m = add(m,
-                    self.msa_att_col(
+        msa_col_attn = self.msa_att_col(
                         m,
                         mask=msa_mask,
                         chunk_size=chunk_size,
                         use_deepspeed_evo_attention=use_deepspeed_evo_attention,
                         use_lma=use_lma,
                         use_flash=use_flash,
-                    ),
+                    )
+        if not self.no_column_attention:
+            m = add(m,
+                    msa_col_attn,
                     inplace=inplace_safe,
                     )
+            if ((step_no % 8 == 0) or ((step_no + 1) % self.no_blocks == 0)):
+                logger.save_tensor_to_npz(tensor=msa_col_attn, data_name=f"msa_col_attn_{step_no}", subdir_name="msa_col_attn")
+            del msa_col_attn
 
         m = add(
             m,
@@ -537,7 +565,10 @@ class EvoformerBlock(MSABlock):
             use_lma=use_lma,
             inplace_safe=inplace_safe,
             _mask_trans=_mask_trans,
-            _attn_chunk_size=_attn_chunk_size
+            _attn_chunk_size=_attn_chunk_size,
+            step_no=step_no,
+            logger=logger,
+            no_blocks=self.no_blocks,
         )
 
         if (_offload_inference and inplace_safe):
@@ -828,7 +859,7 @@ class EvoformerStack(nn.Module):
 
         self.blocks_per_ckpt = blocks_per_ckpt
         self.clear_cache_between_blocks = clear_cache_between_blocks
-
+        self.no_blocks = no_blocks
         self.blocks = nn.ModuleList()
 
         for _ in range(no_blocks):
@@ -849,6 +880,7 @@ class EvoformerStack(nn.Module):
                 fuse_projection_weights=fuse_projection_weights,
                 inf=inf,
                 eps=eps,
+                no_blocks=no_blocks,
             )
             self.blocks.append(block)
 
@@ -870,6 +902,8 @@ class EvoformerStack(nn.Module):
         pair_mask: Optional[torch.Tensor],
         inplace_safe: bool,
         _mask_trans: bool,
+        cycle_no: int,
+        logger: WandBLogger = None
     ):
         blocks = [
             partial(
@@ -882,8 +916,10 @@ class EvoformerStack(nn.Module):
                 use_flash=use_flash,
                 inplace_safe=inplace_safe,
                 _mask_trans=_mask_trans,
+                step_no=cycle_no * self.no_blocks + i,
+                logger=logger,
             )
-            for b in self.blocks
+            for (i, b) in enumerate(self.blocks)
         ]
 
         if(self.clear_cache_between_blocks):
@@ -921,6 +957,7 @@ class EvoformerStack(nn.Module):
         use_lma: bool = False,
         use_flash: bool = False,
         _mask_trans: bool = True,
+        logger: WandBLogger = None,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         assert(not (self.training or torch.is_grad_enabled()))
         blocks = self._prep_blocks(
@@ -961,11 +998,14 @@ class EvoformerStack(nn.Module):
         msa_mask: torch.Tensor,
         pair_mask: torch.Tensor,
         chunk_size: int,
+        cycle_no: int,
         use_deepspeed_evo_attention: bool = False,
         use_lma: bool = False,
         use_flash: bool = False,
         inplace_safe: bool = False,
         _mask_trans: bool = True,
+        logger: WandBLogger = None,
+        # XXX/interstructs output_intermed_structs = False,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Args:
@@ -1008,21 +1048,31 @@ class EvoformerStack(nn.Module):
             pair_mask=pair_mask,
             inplace_safe=inplace_safe,
             _mask_trans=_mask_trans,
+            cycle_no=cycle_no,
+            logger=logger,
         )
 
         blocks_per_ckpt = self.blocks_per_ckpt
         if(not torch.is_grad_enabled()):
             blocks_per_ckpt = None
-        
+
+        # add intermed to return
         m, z = checkpoint_blocks(
             blocks,
             args=(m, z),
             blocks_per_ckpt=blocks_per_ckpt,
+            # im_outputs = output_intermed_structs
         )
+
+        # XXX/interstructs (m, z), intermed_outputs = checkpoint_blocks(
+        #     blocks,
+        #     args=(m, z),
+        #     blocks_per_ckpt=blocks_per_ckpt,
+        # )
 
         s = self.linear(m[..., 0, :, :])
 
-        return m, z, s
+        return m, z, s#, intermed_outputs
 
 
 class ExtraMSAStack(nn.Module):

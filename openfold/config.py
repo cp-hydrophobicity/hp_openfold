@@ -65,6 +65,7 @@ def model_config(
     long_sequence_inference=False,
     use_deepspeed_evoformer_attention=False,
 ):
+    # XXX/interstructs (add arg above) output_intermed_structs=False
     c = copy.deepcopy(config)
     # TRAINING PRESETS
     if name == "initial_training":
@@ -237,6 +238,10 @@ def model_config(
         c.model.template.template_pair_stack.tune_chunk_size = False
         c.model.extra_msa.extra_msa_stack.tune_chunk_size = False
         c.model.evoformer_stack.tune_chunk_size = False
+
+
+    # XXX/interstructs if output_intermed_structs:
+        # c.globals.output_intermed_structs = True
     
     if use_deepspeed_evoformer_attention:
         c.globals.use_deepspeed_evo_attention = True 

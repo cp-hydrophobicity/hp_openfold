@@ -177,17 +177,16 @@ def main(args):
     # Create the output directory
     os.makedirs(args.output_dir, exist_ok=True)
 
-    if args.wandb_project: 
-        wb_logger = WandBLogger(project_name = args.wandb_project, run_name: str, entity: str, config: dict = None)
-
     if args.config_preset.startswith("seq"):
         args.use_single_seq_mode = True
 
     config = model_config(
-        args.config_preset, 
+        args.config_preset,
         long_sequence_inference=args.long_sequence_inference,
-        use_deepspeed_evoformer_attention=args.use_deepspeed_evoformer_attention,
+        use_deepspeed_evoformer_attention=args.use_deepspeed_evoformer_attention#,
+        # output_intermed_structs=args.output_intermed_structs
         )
+    # XXX/interstructs
 
     if args.experiment_config_json: 
         with open(args.experiment_config_json, 'r') as f:
@@ -290,6 +289,8 @@ def main(args):
         cur_tracing_interval = 0
         for (tag, tags), seqs in sorted_targets:
             output_name = f'{tag}_{args.config_preset}'
+            if args.wandb_project:
+                wb_logger = WandBLogger(project_name = args.wandb_project, run_name=output_name, entity=args.wandb_entity, output_dir=output_directory, output_prefix=output_name)
             if args.output_postfix is not None:
                 output_name = f'{output_name}_{args.output_postfix}'
 
@@ -337,7 +338,8 @@ def main(args):
                     )
                     cur_tracing_interval = rounded_seqlen
 
-            out = run_model(model, processed_feature_dict, tag, args.output_dir)
+            out = run_model(model, processed_feature_dict, tag, args.output_dir, logger, wb_logger)
+            wb_logger.finish()
 
             # Toss out the recycling dimensions --- we don't need them anymore
             processed_feature_dict = tensor_tree_map(
@@ -487,6 +489,10 @@ if __name__ == "__main__":
     parser.add_argument(
         "--wandb_entity", type=str, default=None, help="Relevant entity for WandB login."
     )
+    # XXX/interstructs parser.add_argument(
+    #     "--output_intermed_structs", action="store_true", default=False, 
+    #     help="Whether or not to dump intermediate npz atomic pos",
+    # )
     add_data_args(parser)
     args = parser.parse_args()
 
