@@ -156,6 +156,14 @@ def run_model(model, batch, tag, output_dir, logger, wb_logger):
 
         logger.info(f"Running inference for {tag}...")
         t = time.perf_counter()
+
+
+        ## Cascade the structure module function down to blocks
+        model.evoformer.set_structure_module(
+            structure_module=model.structure_module, 
+            generate_intermediates=model.config.output_intermed_structs,
+        )
+
         out = model(batch, wb_logger)
         inference_time = time.perf_counter() - t
         logger.info(f"Inference time: {inference_time}")

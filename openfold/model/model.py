@@ -131,6 +131,7 @@ class AlphaFold(nn.Module):
             is_multimer=self.globals.is_multimer,
             **self.config["structure_module"],
         )
+        
         self.aux_heads = AuxiliaryHeads(
             self.config["heads"],
         )
@@ -213,7 +214,7 @@ class AlphaFold(nn.Module):
     def iteration(self, feats, prevs, cycle_no, logger=None, _recycle=True):
         # Primary output dictionary
         outputs = {}
-
+        
         # This needs to be done manually for DeepSpeed's sake
         dtype = next(self.parameters()).dtype
         for k in feats:
@@ -430,6 +431,7 @@ class AlphaFold(nn.Module):
             m, z, s = self.evoformer(
                 m,
                 z,
+                feats=feats,
                 msa_mask=msa_mask.to(dtype=m.dtype),
                 pair_mask=pair_mask.to(dtype=z.dtype),
                 chunk_size=self.globals.chunk_size,
@@ -440,7 +442,7 @@ class AlphaFold(nn.Module):
                 _mask_trans=self.config._mask_trans,
                 logger=logger,
                 cycle_no=cycle_no,
-                # output_intermed_structs=self.output_intermed_structs
+                output_intermed_structs=self.globals.output_intermed_structs,
             )
 
         outputs["msa"] = m[..., :n_seq, :, :]

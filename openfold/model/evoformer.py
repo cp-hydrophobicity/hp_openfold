@@ -433,6 +433,7 @@ class EvoformerBlock(MSABlock):
         # Specifically, seqemb mode does not use column attention
         self.no_column_attention = no_column_attention
         self.no_blocks = no_blocks
+        self.structure_module = None
 
         if not self.no_column_attention:
             self.msa_att_col = MSAColumnAttention(
@@ -442,9 +443,26 @@ class EvoformerBlock(MSABlock):
                 inf=inf,
             )
 
+    def set_structure_module(self, structure_module, compute_s, generate_intermediates=False):
+        """
+        Set the structure module for the EvoformerBlock.
+
+        Args:
+            structure_module:
+                Structure module to be used
+            compute_s:
+                Linear layer that converts m to s for input to structure module
+            generate_intermediates:
+                Whether to generate intermediate structures
+        """
+        self.structure_module = structure_module
+        self.compute_s = compute_s
+        self.generate_intermediate_structures = generate_intermediates
+
     def forward(self,
         m: Optional[torch.Tensor],
         z: Optional[torch.Tensor],
+        feats: Dict[str, torch.Tensor],
         msa_mask: torch.Tensor,
         pair_mask: torch.Tensor,
         step_no: int,
@@ -579,6 +597,22 @@ class EvoformerBlock(MSABlock):
             m, _ = input_tensors
         else:
             m = input_tensors[0]
+            
+        print(self.structure_module)
+        print(self.generate_intermediate_structures)
+        print(self.compute_s)
+        s_inputs = {}
+        s_inputs["msa"] = m[..., :n_seq, :, :]
+        s_inputs["pair"] = z
+        s_inputs["single"] = self.compute_s(m)
+        sm = self.structure_module(
+            s_outputs,
+            feats["aatype"],
+            mask=feats["seq_mask"].to(dtype=s.dtype),
+            inplace_safe=inplace_safe,
+            _offload_inference=self.globals.offload_inference,
+        )
+        logger.save_tensor_to_npz(sm, data_name=f"atom_positions_subcycle={i}", subdir_name=f"intermed_atom_positions_cycle={cycle_no}")
 
         return m, z
 
@@ -890,10 +924,15 @@ class EvoformerStack(nn.Module):
         self.chunk_size_tuner = None
         if(tune_chunk_size):
             self.chunk_size_tuner = ChunkSizeTuner()
+            
+    def set_structure_module(self, structure_module, generate_intermediates=False):
+        for block in self.blocks:
+            block.set_structure_module(structure_module=structure_module, compute_s=self.linear, generate_intermediates=generate_intermediates)
 
     def _prep_blocks(self, 
         m: torch.Tensor, 
-        z: torch.Tensor, 
+        z: torch.Tensor,
+        feats: Dict[str, torch.Tensor],
         chunk_size: int,
         use_deepspeed_evo_attention: bool,
         use_lma: bool,
@@ -908,6 +947,7 @@ class EvoformerStack(nn.Module):
         blocks = [
             partial(
                 b,
+                feats=feats,
                 msa_mask=msa_mask,
                 pair_mask=pair_mask,
                 chunk_size=chunk_size,
@@ -995,6 +1035,7 @@ class EvoformerStack(nn.Module):
     def forward(self,
         m: torch.Tensor,
         z: torch.Tensor,
+        feats: Dict[str, torch.Tensor],
         msa_mask: torch.Tensor,
         pair_mask: torch.Tensor,
         chunk_size: int,
@@ -1005,7 +1046,6 @@ class EvoformerStack(nn.Module):
         inplace_safe: bool = False,
         _mask_trans: bool = True,
         logger: WandBLogger = None,
-        # XXX/interstructs output_intermed_structs = False,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Args:
@@ -1040,6 +1080,7 @@ class EvoformerStack(nn.Module):
         blocks = self._prep_blocks(
             m=m,
             z=z,
+            feats=feats,
             chunk_size=chunk_size,
             use_deepspeed_evo_attention=use_deepspeed_evo_attention,
             use_lma=use_lma,

@@ -49,6 +49,11 @@ class OpenFoldWrapper(pl.LightningModule):
         self.model = AlphaFold(config)
         self.is_multimer = self.config.globals.is_multimer
 
+        # XXX/CB
+        # for name, param in self.model.named_parameters():
+        #     if "physical_context" not in name:
+        #         param.requires_grad = False
+
         self.loss = AlphaFoldLoss(config.loss)
 
         self.ema = ExponentialMovingAverage(
@@ -220,6 +225,8 @@ class OpenFoldWrapper(pl.LightningModule):
     ) -> torch.optim.Adam:
         # Ignored as long as a DeepSpeed optimizer is configured
         optimizer = torch.optim.Adam(
+            # XXX/CB
+            # filter(lambda p: p.requires_grad, self.model.parameters())
             self.model.parameters(),
             lr=learning_rate,
             eps=eps

@@ -30,37 +30,39 @@ TEMPLATE_MMCIF_DIR="$BASE_DATA_DIR/mmcif"
 
 # Subdirectories for input FASTA files
 INPUT_FASTA_DIRS=(
-    "$GPFS_DIR/data/test/fasta/6kwc_mut/gpu0"
-    "$GPFS_DIR/data/test/fasta/6kwc_mut/gpu1"
-    "$GPFS_DIR/data/test/fasta/6kwc_mut/gpu2"
-    "$GPFS_DIR/data/test/fasta/6kwc_mut/gpu3"
-    "$GPFS_DIR/data/test/fasta/6kwc_mut/gpu4"
-    "$GPFS_DIR/data/test/fasta/6kwc_mut/gpu5"
-    "$GPFS_DIR/data/test/fasta/6kwc_mut/gpu6"
-    "$GPFS_DIR/data/test/fasta/6kwc_mut/gpu7"
+    "$BASE_DATA_DIR/test_fasta/6kwc"
+    # "$GPFS_DIR/data/test/fasta/6kwc_mut/gpu0"
+    # "$GPFS_DIR/data/test/fasta/6kwc_mut/gpu1"
+    # "$GPFS_DIR/data/test/fasta/6kwc_mut/gpu2"
+    # "$GPFS_DIR/data/test/fasta/6kwc_mut/gpu3"
+    # "$GPFS_DIR/data/test/fasta/6kwc_mut/gpu4"
+    # "$GPFS_DIR/data/test/fasta/6kwc_mut/gpu5"
+    # "$GPFS_DIR/data/test/fasta/6kwc_mut/gpu6"
+    # "$GPFS_DIR/data/test/fasta/6kwc_mut/gpu7"
 )
 
 # Output directories corresponding to each input
 OUTPUT_DIRS=(
-    "$GPFS_DIR/output/6kwc_mut/gpu0"
-    "$GPFS_DIR/output/6kwc_mut/gpu1"
-    "$GPFS_DIR/output/6kwc_mut/gpu2"
-    "$GPFS_DIR/output/6kwc_mut/gpu3"
-    "$GPFS_DIR/output/6kwc_mut/gpu4"
-    "$GPFS_DIR/output/6kwc_mut/gpu5"
-    "$GPFS_DIR/output/6kwc_mut/gpu6"
-    "$GPFS_DIR/output/6kwc_mut/gpu7"
+    "$GPFS_DIR/output/6kwc_feb_test"
+    # "$GPFS_DIR/output/6kwc_mut/gpu0"
+    # "$GPFS_DIR/output/6kwc_mut/gpu1"
+    # "$GPFS_DIR/output/6kwc_mut/gpu2"
+    # "$GPFS_DIR/output/6kwc_mut/gpu3"
+    # "$GPFS_DIR/output/6kwc_mut/gpu4"
+    # "$GPFS_DIR/output/6kwc_mut/gpu5"
+    # "$GPFS_DIR/output/6kwc_mut/gpu6"
+    # "$GPFS_DIR/output/6kwc_mut/gpu7"
 )
 
 WANDB_PROJECTS=(
-    "6kwc_mut"
-    "6kwc_mut"
-    "6kwc_mut"
-    "6kwc_mut"
-    "6kwc_mut"
-    "6kwc_mut"
-    "6kwc_mut"
-    "6kwc_mut"
+    "6kwc_mut_feb_test"
+    # "6kwc_mut"
+    # "6kwc_mut"
+    # "6kwc_mut"
+    # "6kwc_mut"
+    # "6kwc_mut"
+    # "6kwc_mut"
+    # "6kwc_mut"
 )
 
 # Determine the input and output directories based on SLURM task ID

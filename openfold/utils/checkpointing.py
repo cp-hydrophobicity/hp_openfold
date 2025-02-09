@@ -95,8 +95,5 @@ def checkpoint_blocks(
         e = s + blocks_per_ckpt
         args = checkpoint(chunker(s, e), *args)
         args = wrap(args)
-        if im_outputs:
-            temp_args = (args[0], args[1], compute_s(args[0][..., 0, :, :]))
-            intermed_args.append(temp_args)
 
-    return args#, intermed_args
+    return args

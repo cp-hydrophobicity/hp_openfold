@@ -489,10 +489,10 @@ if __name__ == "__main__":
     parser.add_argument(
         "--wandb_entity", type=str, default=None, help="Relevant entity for WandB login."
     )
-    # XXX/interstructs parser.add_argument(
-    #     "--output_intermed_structs", action="store_true", default=False, 
-    #     help="Whether or not to dump intermediate npz atomic pos",
-    # )
+    parser.add_argument(
+        "--output_intermed_structs", action="store_true", default=False, 
+        help="Whether or not to dump intermediate npz atomic pos",
+    )
     add_data_args(parser)
     args = parser.parse_args()
 

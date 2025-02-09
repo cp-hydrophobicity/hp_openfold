@@ -64,6 +64,7 @@ def model_config(
     low_prec=False, 
     long_sequence_inference=False,
     use_deepspeed_evoformer_attention=False,
+    output_intermed_structs=False,
 ):
     # XXX/interstructs (add arg above) output_intermed_structs=False
     c = copy.deepcopy(config)
