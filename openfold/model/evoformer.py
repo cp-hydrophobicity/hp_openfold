@@ -16,7 +16,7 @@ import math
 import sys
 import torch
 import torch.nn as nn
-from typing import Tuple, Sequence, Optional
+from typing import Tuple, Sequence, Optional, Dict
 from functools import partial
 from abc import ABC, abstractmethod
 
@@ -43,6 +43,8 @@ from openfold.model.triangular_multiplicative_update import (
 from openfold.utils.checkpointing import checkpoint_blocks, get_checkpoint_fn
 from openfold.utils.chunk_utils import chunk_layer, ChunkSizeTuner
 from openfold.utils.tensor_utils import add
+
+from openfold.utils.feats import atom14_to_atom37
 
 from openfold.utils.custom_logging import WandBLogger
 
@@ -601,18 +603,23 @@ class EvoformerBlock(MSABlock):
         print(self.structure_module)
         print(self.generate_intermediate_structures)
         print(self.compute_s)
-        s_inputs = {}
-        s_inputs["msa"] = m[..., :n_seq, :, :]
-        s_inputs["pair"] = z
-        s_inputs["single"] = self.compute_s(m)
-        sm = self.structure_module(
-            s_outputs,
-            feats["aatype"],
-            mask=feats["seq_mask"].to(dtype=s.dtype),
-            inplace_safe=inplace_safe,
-            _offload_inference=self.globals.offload_inference,
-        )
-        logger.save_tensor_to_npz(sm, data_name=f"atom_positions_subcycle={i}", subdir_name=f"intermed_atom_positions_cycle={cycle_no}")
+        if self.generate_intermediate_structures:
+            s_inputs = {}
+            n_seq = feats["msa_feat"].shape[-3]
+            s_inputs["msa"] = m[..., :n_seq, :, :]
+            s_inputs["pair"] = z
+            s_inputs["single"] = self.compute_s(m[..., 0, :, :])
+            sm = self.structure_module(
+                s_inputs,
+                feats["aatype"],
+                mask=feats["seq_mask"].to(dtype=s_inputs["single"].dtype),
+                inplace_safe=inplace_safe,
+                # _offload_inference=self.globals.offload_inference,
+            )
+            int_atom_pos = atom14_to_atom37(
+                sm["positions"][-1], feats
+            )
+            logger.save_tensor_to_npz(int_atom_pos, data_name=f"atom_positions_subcycle={step_no}", subdir_name="atom_positions")
 
         return m, z
 

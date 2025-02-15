@@ -6,6 +6,8 @@ build
 dist
 wandb
 
+cp_log/
+
 # files from script downloads
 data
 openfold/resources/

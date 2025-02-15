@@ -427,7 +427,6 @@ class AlphaFold(nn.Module):
 
             del input_tensors
         else:
-            # XXX/interstructs add im_outputs
             m, z, s = self.evoformer(
                 m,
                 z,
@@ -442,7 +441,6 @@ class AlphaFold(nn.Module):
                 _mask_trans=self.config._mask_trans,
                 logger=logger,
                 cycle_no=cycle_no,
-                output_intermed_structs=self.globals.output_intermed_structs,
             )
 
         outputs["msa"] = m[..., :n_seq, :, :]
@@ -450,21 +448,6 @@ class AlphaFold(nn.Module):
         outputs["single"] = s
 
         del z
-
-        # if not(self.globals.offload_inference) and self.output_intermed_structs:
-        #     s_outputs = {}
-        #     for i, m, z, s in enumerate(im_outputs):
-        #         s_outputs["msa"] = m[..., :n_seq, :, :]
-        #         s_outputs["pair"] = z
-        #         s_outputs["single"] = s
-        #         sm = self.structure_module(
-        #             s_outputs,
-        #             feats["aatype"],
-        #             mask=feats["seq_mask"].to(dtype=s.dtype),
-        #             inplace_safe=inplace_safe,
-        #             _offload_inference=self.globals.offload_inference,
-        #         )
-        #         logger.save_tensor_to_npz(sm, data_name=f"atom_positions_subcycle={i}", subdir_name=f"intermed_atom_positions_cycle={cycle_no}")
 
         # Predict 3D structure
         outputs["sm"] = self.structure_module(

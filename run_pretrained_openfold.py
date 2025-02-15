@@ -183,8 +183,8 @@ def main(args):
     config = model_config(
         args.config_preset,
         long_sequence_inference=args.long_sequence_inference,
-        use_deepspeed_evoformer_attention=args.use_deepspeed_evoformer_attention#,
-        # output_intermed_structs=args.output_intermed_structs
+        use_deepspeed_evoformer_attention=args.use_deepspeed_evoformer_attention,
+        output_intermed_structs=args.output_intermed_structs,
         )
     # XXX/interstructs
 

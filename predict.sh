@@ -3,16 +3,16 @@
 # Request a GPU partition node and access to 1 GPU per task
 #SBATCH -p 3090-gcondo --gres=gpu:1
 #SBATCH -N 1
-#SBATCH -n 16 
+#SBATCH -n 4
 
 #SBATCH --mem=80G
 #SBATCH -t 40:00:00
 
 ## Provide a job name
-#SBATCH -J openfold_6kwc_mut_partitioned
+#SBATCH -J openfold_6kwc_precomputed_alignment_test_intermed
 
-#SBATCH -o ../output/slurm_out/6kwc_mut_%A_%a.out
-#SBATCH -e ../output/slurm_out/6kwc_mut_%A_%a.err
+#SBATCH -o ../output/slurm_out/6kwc_alignment_test_intermed_%A_%a.out
+#SBATCH -e ../output/slurm_out/6kwc_alignment_test_intermed_%A_%a.err
 
 # module purge
 # module load miniforge
@@ -30,7 +30,7 @@ TEMPLATE_MMCIF_DIR="$BASE_DATA_DIR/mmcif"
 
 # Subdirectories for input FASTA files
 INPUT_FASTA_DIRS=(
-    "$BASE_DATA_DIR/test_fasta/6kwc"
+    "$BASE_DATA_DIR/test/fasta/6kwc"
     # "$GPFS_DIR/data/test/fasta/6kwc_mut/gpu0"
     # "$GPFS_DIR/data/test/fasta/6kwc_mut/gpu1"
     # "$GPFS_DIR/data/test/fasta/6kwc_mut/gpu2"
@@ -43,7 +43,7 @@ INPUT_FASTA_DIRS=(
 
 # Output directories corresponding to each input
 OUTPUT_DIRS=(
-    "$GPFS_DIR/output/6kwc_feb_test"
+    "$GPFS_DIR/output/6kwc_feb_test_struct"
     # "$GPFS_DIR/output/6kwc_mut/gpu0"
     # "$GPFS_DIR/output/6kwc_mut/gpu1"
     # "$GPFS_DIR/output/6kwc_mut/gpu2"
@@ -52,6 +52,17 @@ OUTPUT_DIRS=(
     # "$GPFS_DIR/output/6kwc_mut/gpu5"
     # "$GPFS_DIR/output/6kwc_mut/gpu6"
     # "$GPFS_DIR/output/6kwc_mut/gpu7"
+)
+
+PRECOMPUTED_ALIGNMENTS=(
+    "$GPFS_DIR/output/6kwc_feb_test/alignments"
+    # "$GPFS_DIR/data/test/fasta/6kwc_mut/gpu1/6kwc_mut_1.hhr"
+    # "$GPFS_DIR/data/test/fasta/6kwc_mut/gpu2/6kwc_mut_2.hhr"
+    # "$GPFS_DIR/data/test/fasta/6kwc_mut/gpu3/6kwc_mut_3.hhr"
+    # "$GPFS_DIR/data/test/fasta/6kwc_mut/gpu4/6kwc_mut_4.hhr"
+    # "$GPFS_DIR/data/test/fasta/6kwc_mut/gpu5/6kwc_mut_5.hhr"
+    # "$GPFS_DIR/data/test/fasta/6kwc_mut/gpu6/6kwc_mut_6.hhr"
+    # "$GPFS_DIR/data/test/fasta/6kwc_mut/gpu7/6kwc_mut_7.hhr"
 )
 
 WANDB_PROJECTS=(
@@ -85,5 +96,7 @@ CUDA_VISIBLE_DEVICES=0 python3 run_pretrained_openfold.py \
     --save_outputs \
     --wandb_project $WANDB_PROJECT \
     --wandb_entity sorins_charlatans \
-    --cpus 16 \
-    --cif_output
+    --cpus 4 \
+    --cif_output \
+    --use_precomputed_alignments $PRECOMPUTED_ALIGNMENTS \
+    --output_intermed_structs \

@@ -159,6 +159,7 @@ def run_model(model, batch, tag, output_dir, logger, wb_logger):
 
 
         ## Cascade the structure module function down to blocks
+        print(model.config)
         model.evoformer.set_structure_module(
             structure_module=model.structure_module, 
             generate_intermediates=model.config.output_intermed_structs,

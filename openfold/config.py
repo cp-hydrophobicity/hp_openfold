@@ -240,9 +240,7 @@ def model_config(
         c.model.extra_msa.extra_msa_stack.tune_chunk_size = False
         c.model.evoformer_stack.tune_chunk_size = False
 
-
-    # XXX/interstructs if output_intermed_structs:
-        # c.globals.output_intermed_structs = True
+    c.model.output_intermed_structs = output_intermed_structs
     
     if use_deepspeed_evoformer_attention:
         c.globals.use_deepspeed_evo_attention = True 
