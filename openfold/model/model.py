@@ -83,7 +83,6 @@ class AlphaFold(nn.Module):
         self.template_config = self.config.template
         self.extra_msa_config = self.config.extra_msa
         self.seqemb_mode = config.globals.seqemb_mode_enabled
-        # XXX/interstructs self.output_intermed_structs = config.globals.output_intermed_structs
 
         # Main trunk + structure module
         if self.globals.is_multimer:
@@ -589,9 +588,9 @@ class AlphaFold(nn.Module):
                 log_out = self.aux_heads(outputs)
                 logger.log_metric(value=torch.mean(log_out["plddt"]), name="mean_plddt", step=cycle_no)
                 logger.save_tensor_to_npz(tensor=log_out["plddt"], data_name=f"plddt-cycle_{cycle_no}", subdir_name="plddt")
-                logger.save_tensor_to_npz(tensor=outputs["final_atom_positions"], data_name=f"final-atom-positions-cycle_{cycle_no}", subdir_name="final_atom_positions")
-                logger.save_tensor_to_npz(tensor=outputs["pair"], data_name=f"pair-cycle_{cycle_no}", subdir_name="pair_embed")
-                logger.save_tensor_to_npz(tensor=outputs["single"], data_name=f"single-cycle_{cycle_no}", subdir_name="single_embed")
+                # logger.save_tensor_to_npz(tensor=outputs["final_atom_positions"], data_name=f"final-atom-positions-cycle_{cycle_no}", subdir_name="final_atom_positions")
+                # logger.save_tensor_to_npz(tensor=outputs["pair"], data_name=f"pair-cycle_{cycle_no}", subdir_name="pair_embed")
+                # logger.save_tensor_to_npz(tensor=outputs["single"], data_name=f"single-cycle_{cycle_no}", subdir_name="single_embed")
 
                 if not is_final_iter:
                     del outputs

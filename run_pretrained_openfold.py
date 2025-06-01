@@ -35,7 +35,8 @@ if (
     (torch_major_version == 1 and torch_minor_version >= 12)
 ):
     # Gives a large speedup on Ampere-class GPUs
-    torch.set_float32_matmul_precision("high")
+    # torch.set_float32_matmul_precision("high")
+    pass
 
 torch.set_grad_enabled(False)
 
@@ -185,8 +186,11 @@ def main(args):
         long_sequence_inference=args.long_sequence_inference,
         use_deepspeed_evoformer_attention=args.use_deepspeed_evoformer_attention,
         output_intermed_structs=args.output_intermed_structs,
-        )
-    # XXX/interstructs
+        mmc_mode=args.mmc_mode,
+        mmc_temp=args.mmc_temp,
+        mmc_pH=args.mmc_pH,
+        save_pca_embeddings=args.save_pca_embeddings,
+    )
 
     if args.experiment_config_json: 
         with open(args.experiment_config_json, 'r') as f:
@@ -289,8 +293,18 @@ def main(args):
         cur_tracing_interval = 0
         for (tag, tags), seqs in sorted_targets:
             output_name = f'{tag}_{args.config_preset}'
+            # Create sequence-specific output directory
+            seq_output_dir = os.path.join(output_directory, tag)
+            os.makedirs(seq_output_dir, exist_ok=True)
+            
             if args.wandb_project:
-                wb_logger = WandBLogger(project_name = args.wandb_project, run_name=output_name, entity=args.wandb_entity, output_dir=output_directory, output_prefix=output_name)
+                wb_logger = WandBLogger(project_name = args.wandb_project, run_name=output_name, entity=args.wandb_entity, output_dir=seq_output_dir, output_prefix=output_name)
+                log_indices = []
+                for i in range(4):
+                    range_i = (38 + 48*i, 48 + 48*i)
+                    indices_i = [i for i in range(range_i[0], range_i[1])]
+                    log_indices.append(indices_i)
+                wb_logger.initialize_save_indices(log_indices, 5)
             if args.output_postfix is not None:
                 output_name = f'{output_name}_{args.output_postfix}'
 
@@ -338,7 +352,7 @@ def main(args):
                     )
                     cur_tracing_interval = rounded_seqlen
 
-            out = run_model(model, processed_feature_dict, tag, args.output_dir, logger, wb_logger)
+            out = run_model(model, processed_feature_dict, tag, seq_output_dir, logger, wb_logger)
             wb_logger.finish()
 
             # Toss out the recycling dimensions --- we don't need them anymore
@@ -362,7 +376,7 @@ def main(args):
             if args.cif_output:
                 unrelaxed_file_suffix = "_unrelaxed.cif"
             unrelaxed_output_path = os.path.join(
-                output_directory, f'{output_name}{unrelaxed_file_suffix}'
+                seq_output_dir, f'{output_name}{unrelaxed_file_suffix}'
             )
 
             with open(unrelaxed_output_path, 'w') as fp:
@@ -376,12 +390,35 @@ def main(args):
             if not args.skip_relaxation:
                 # Relax the prediction.
                 logger.info(f"Running relaxation on {unrelaxed_output_path}...")
-                relax_protein(config, args.model_device, unrelaxed_protein, output_directory, output_name,
+                import time
+                start = time.time()
+                # Save original CUDA_VISIBLE_DEVICES value
+                original_cuda_visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES", "")
+                try:
+                    relax_protein(config, args.model_device, unrelaxed_protein, seq_output_dir, output_name,
                               args.cif_output)
+                except Exception as e:
+                    import shutil
+                    
+                    # Restore original CUDA_VISIBLE_DEVICES value
+                    os.environ["CUDA_VISIBLE_DEVICES"] = original_cuda_visible_devices
+                    logger.warning(f"Relaxation failed for sequence {tag}: {str(e)}")
+                    print(f"Relaxation failed for sequence {tag}: {str(e)}")
+                    try:
+                        if os.path.exists(seq_output_dir):
+                            shutil.rmtree(seq_output_dir)
+                            logger.info(f"Completely deleted prediction directory: {seq_output_dir}")
+                    except Exception as cleanup_error:
+                        logger.error(f"Error deleting prediction directory {seq_output_dir}: {str(cleanup_error)}")
+                    
+                    logger.info(f"Continuing with next sequence after deleting prediction directory for {tag}")
+                    continue
+                end = time.time()
+                logger.info(f"Relaxation time: {end - start}")
 
             if args.save_outputs:
                 output_dict_path = os.path.join(
-                    output_directory, f'{output_name}_output_dict.pkl'
+                    seq_output_dir, f'{output_name}_output_dict.pkl'
                 )
                 with open(output_dict_path, "wb") as fp:
                     pickle.dump(out, fp, protocol=pickle.HIGHEST_PROTOCOL)
@@ -493,6 +530,23 @@ if __name__ == "__main__":
         "--output_intermed_structs", action="store_true", default=False, 
         help="Whether or not to dump intermediate npz atomic pos",
     )
+    parser.add_argument(
+        "--mmc_mode", type=int, default=0,
+        help="Number of blocks from the end to apply MMC (0 disables MMC)",
+    )
+    parser.add_argument(
+        "--mmc_temp", type=float, default=300.0,
+        help="Temperature for MMC (default: 300.0)",
+    )
+    parser.add_argument(
+        "--mmc_pH", type=float, default=7.0,
+        help="pH for MMC (default: 7.0)",
+    )
+    parser.add_argument(
+        "--save_pca_embeddings", type=int, default=0,
+        help="Number of principal components to save for single and pair embeddings (0 disables saving)",
+    )
+
     add_data_args(parser)
     args = parser.parse_args()
 

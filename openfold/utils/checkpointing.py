@@ -44,8 +44,6 @@ def checkpoint_blocks(
     blocks: List[Callable],
     args: BLOCK_ARGS,
     blocks_per_ckpt: Optional[int],
-    im_outputs: bool = False,
-    compute_s = None
 ) -> BLOCK_ARGS:
     """
     Chunk a list of blocks and run each chunk with activation

@@ -61,6 +61,7 @@ def atom37_to_atom14(aatype, all_atom_pos, all_atom_mask):
         rc.RESTYPE_ATOM14_TO_ATOM37, aatype
     )
     no_batch_dims = len(aatype.shape)
+    
     atom14_mask = tensor_utils.batched_gather(
         all_atom_mask, 
         residx_atom14_to_atom37, 

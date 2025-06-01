@@ -49,11 +49,6 @@ class OpenFoldWrapper(pl.LightningModule):
         self.model = AlphaFold(config)
         self.is_multimer = self.config.globals.is_multimer
 
-        # XXX/CB
-        # for name, param in self.model.named_parameters():
-        #     if "physical_context" not in name:
-        #         param.requires_grad = False
-
         self.loss = AlphaFoldLoss(config.loss)
 
         self.ema = ExponentialMovingAverage(

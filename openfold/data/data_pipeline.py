@@ -27,13 +27,9 @@ from openfold.data import templates, parsers, mmcif_parsing, msa_identifiers, ms
 from openfold.data.templates import get_custom_template_features, empty_template_feats
 from openfold.data.tools import jackhmmer, hhblits, hhsearch, hmmsearch
 from openfold.np import residue_constants, protein
-from templogger import LogFile
 
 FeatureDict = MutableMapping[str, np.ndarray]
 TemplateSearcher = Union[hhsearch.HHSearch, hmmsearch.Hmmsearch]
-
-cp_log = LogFile('cp_log/dpipeline.txt')
-
 
 def make_template_features(
     input_sequence: str,
@@ -41,9 +37,7 @@ def make_template_features(
     template_featurizer: Any,
 ) -> FeatureDict:
     hits_cat = sum(hits.values(), [])
-    
-    cp_log.write(f'hits_cat: {hits_cat} \n t_feat: {template_featurizer} \n')
-    
+        
     if (len(hits_cat) == 0 or template_featurizer is None):
         template_features = empty_template_feats(len(input_sequence))
     else:

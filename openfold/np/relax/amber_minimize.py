@@ -98,6 +98,7 @@ def _openmm_minimize(
 
     integrator = openmm.LangevinIntegrator(0, 0.01, 0.0)
     platform = openmm.Platform.getPlatformByName("CUDA" if use_gpu else "CPU")
+    # print(use_gpu, platform)
     simulation = openmm_app.Simulation(
         pdb.topology, system, integrator, platform
     )

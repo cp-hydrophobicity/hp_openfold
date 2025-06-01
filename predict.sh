@@ -6,13 +6,13 @@
 #SBATCH -n 4
 
 #SBATCH --mem=80G
-#SBATCH -t 40:00:00
+#SBATCH -t 6:00:00
 
 ## Provide a job name
-#SBATCH -J openfold_6kwc_precomputed_alignment_test_intermed
+#SBATCH -J colinoscopy
 
-#SBATCH -o ../output/slurm_out/6kwc_alignment_test_intermed_%A_%a.out
-#SBATCH -e ../output/slurm_out/6kwc_alignment_test_intermed_%A_%a.err
+#SBATCH -o ../output/slurm_out/colinoscopy_test_%A_%a.out
+#SBATCH -e ../output/slurm_out/colinoscopy_test_%A_%a.err
 
 # module purge
 # module load miniforge
@@ -24,55 +24,34 @@
 # source activate
 # conda activate hp_openfold
 
+nvidia-smi
+
 GPFS_DIR="/gpfs/data/rsingh47/hp_protein_folding/protein_folding"
 BASE_DATA_DIR="$GPFS_DIR/data"
 TEMPLATE_MMCIF_DIR="$BASE_DATA_DIR/mmcif"
 
 # Subdirectories for input FASTA files
 INPUT_FASTA_DIRS=(
-    "$BASE_DATA_DIR/test/fasta/6kwc"
+    "$BASE_DATA_DIR/test/fasta/2Y3C_A"
     # "$GPFS_DIR/data/test/fasta/6kwc_mut/gpu0"
     # "$GPFS_DIR/data/test/fasta/6kwc_mut/gpu1"
     # "$GPFS_DIR/data/test/fasta/6kwc_mut/gpu2"
-    # "$GPFS_DIR/data/test/fasta/6kwc_mut/gpu3"
-    # "$GPFS_DIR/data/test/fasta/6kwc_mut/gpu4"
-    # "$GPFS_DIR/data/test/fasta/6kwc_mut/gpu5"
-    # "$GPFS_DIR/data/test/fasta/6kwc_mut/gpu6"
-    # "$GPFS_DIR/data/test/fasta/6kwc_mut/gpu7"
 )
 
 # Output directories corresponding to each input
 OUTPUT_DIRS=(
-    "$GPFS_DIR/output/6kwc_feb_test_struct"
+    "$GPFS_DIR/output"
     # "$GPFS_DIR/output/6kwc_mut/gpu0"
     # "$GPFS_DIR/output/6kwc_mut/gpu1"
-    # "$GPFS_DIR/output/6kwc_mut/gpu2"
-    # "$GPFS_DIR/output/6kwc_mut/gpu3"
-    # "$GPFS_DIR/output/6kwc_mut/gpu4"
-    # "$GPFS_DIR/output/6kwc_mut/gpu5"
-    # "$GPFS_DIR/output/6kwc_mut/gpu6"
-    # "$GPFS_DIR/output/6kwc_mut/gpu7"
 )
 
 PRECOMPUTED_ALIGNMENTS=(
-    "$GPFS_DIR/output/6kwc_feb_test/alignments"
-    # "$GPFS_DIR/data/test/fasta/6kwc_mut/gpu1/6kwc_mut_1.hhr"
-    # "$GPFS_DIR/data/test/fasta/6kwc_mut/gpu2/6kwc_mut_2.hhr"
-    # "$GPFS_DIR/data/test/fasta/6kwc_mut/gpu3/6kwc_mut_3.hhr"
-    # "$GPFS_DIR/data/test/fasta/6kwc_mut/gpu4/6kwc_mut_4.hhr"
-    # "$GPFS_DIR/data/test/fasta/6kwc_mut/gpu5/6kwc_mut_5.hhr"
-    # "$GPFS_DIR/data/test/fasta/6kwc_mut/gpu6/6kwc_mut_6.hhr"
-    # "$GPFS_DIR/data/test/fasta/6kwc_mut/gpu7/6kwc_mut_7.hhr"
+    "$BASE_DATA_DIR/precomputed_alignments"
+    # "$GPFS_DIR/output/6kwc/alignments"
 )
 
 WANDB_PROJECTS=(
-    "6kwc_mut_feb_test"
-    # "6kwc_mut"
-    # "6kwc_mut"
-    # "6kwc_mut"
-    # "6kwc_mut"
-    # "6kwc_mut"
-    # "6kwc_mut"
+    "3JAV_A"
     # "6kwc_mut"
 )
 
@@ -81,7 +60,7 @@ INPUT_FASTA_DIR="${INPUT_FASTA_DIRS[$SLURM_ARRAY_TASK_ID]}"
 OUTPUT_DIR="${OUTPUT_DIRS[$SLURM_ARRAY_TASK_ID]}"
 WANDB_PROJECT="${WANDB_PROJECTS[$SLURM_ARRAY_TASK_ID]}"
 
-# Create output directory if it does not exist
+# Create base output directory if it does not exist
 mkdir -p "$OUTPUT_DIR"
 
 # Run the OpenFold script on the assigned GPU
@@ -99,4 +78,4 @@ CUDA_VISIBLE_DEVICES=0 python3 run_pretrained_openfold.py \
     --cpus 4 \
     --cif_output \
     --use_precomputed_alignments $PRECOMPUTED_ALIGNMENTS \
-    --output_intermed_structs \
+    # --output_intermed_structs

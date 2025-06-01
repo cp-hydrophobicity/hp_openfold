@@ -65,8 +65,11 @@ def model_config(
     long_sequence_inference=False,
     use_deepspeed_evoformer_attention=False,
     output_intermed_structs=False,
+    save_pca_embeddings=0,
+    mmc_mode=0,
+    mmc_temp=300,
+    mmc_pH=7.0,
 ):
-    # XXX/interstructs (add arg above) output_intermed_structs=False
     c = copy.deepcopy(config)
     # TRAINING PRESETS
     if name == "initial_training":
@@ -241,7 +244,15 @@ def model_config(
         c.model.evoformer_stack.tune_chunk_size = False
 
     c.model.output_intermed_structs = output_intermed_structs
-    
+    c.model.evoformer_stack.save_pca_embeddings = save_pca_embeddings
+    # Add MMC configuration - mmc_mode specifies number of blocks from end
+    c.model.evoformer_stack.mmc_blocks = mmc_mode
+    if mmc_mode > 0 and mmc_mode > c.model.evoformer_stack.no_blocks:
+        raise ValueError(f"mmc_mode ({mmc_mode} blocks) cannot be greater than total number of blocks ({c.model.evoformer_stack.no_blocks})")
+
+    c.model.evoformer_stack.mmc_temp = mmc_temp
+    c.model.evoformer_stack.mmc_pH = mmc_pH
+
     if use_deepspeed_evoformer_attention:
         c.globals.use_deepspeed_evo_attention = True 
     
@@ -613,6 +624,7 @@ config = mlc.ConfigDict(
                 "tune_chunk_size": tune_chunk_size,
                 "inf": 1e9,
                 "eps": eps,  # 1e-10,
+                "mmc_blocks": 0,
             },
             "structure_module": {
                 "c_s": c_s,

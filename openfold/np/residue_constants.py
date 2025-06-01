@@ -1130,7 +1130,6 @@ restype_atom14_mask = np.zeros([21, 14], dtype=np.float32)
 restype_atom14_rigid_group_positions = np.zeros([21, 14, 3], dtype=np.float32)
 restype_rigid_group_default_frame = np.zeros([21, 8, 4, 4], dtype=np.float32)
 
-
 def _make_rigid_group_constants():
     """Fill the arrays above."""
     for restype, restype_letter in enumerate(restypes):

@@ -48,6 +48,8 @@ from openfold.utils.feats import atom14_to_atom37
 
 from openfold.utils.custom_logging import WandBLogger
 
+from sklearn.decomposition import PCA
+
 
 class MSATransition(nn.Module):
     """
@@ -274,7 +276,8 @@ class PairStack(nn.Module):
             tri_save = tri_save.contiguous()
 
         if (step_no is not None) and ((step_no % 8 == 0) or ((step_no + 1) % no_blocks == 0)):
-            logger.save_tensor_to_npz(tensor=tri_save, data_name=f"tri_attn-cycle_iter_{step_no}", subdir_name="tri_attn")
+            pass
+            # logger.save_tensor_to_npz(tensor=tri_save, data_name=f"tri_attn-cycle_iter_{step_no}", subdir_name="tri_attn")
         del tri_save, tri_end
 
         z = add(z,
@@ -414,6 +417,7 @@ class EvoformerBlock(MSABlock):
         inf: float,
         eps: float,
         no_blocks: int,
+        save_pca_embeddings: int = 0,
     ):
         super(EvoformerBlock, self).__init__(c_m=c_m,
                                              c_z=c_z,
@@ -429,12 +433,13 @@ class EvoformerBlock(MSABlock):
                                              opm_first=opm_first,
                                              fuse_projection_weights=fuse_projection_weights,
                                              inf=inf,
-                                             eps=eps
+                                             eps=eps,
                                              )
 
         # Specifically, seqemb mode does not use column attention
         self.no_column_attention = no_column_attention
         self.no_blocks = no_blocks
+        self.save_pca_embeddings = save_pca_embeddings
         self.structure_module = None
 
         if not self.no_column_attention:
@@ -540,7 +545,8 @@ class EvoformerBlock(MSABlock):
                     inplace=inplace_safe,
                     )
             if ((step_no % 8 == 0) or ((step_no + 1) % self.no_blocks == 0)):
-                logger.save_tensor_to_npz(tensor=msa_col_attn, data_name=f"msa_col_attn_{step_no}", subdir_name="msa_col_attn")
+                pass
+                # logger.save_tensor_to_npz(tensor=msa_col_attn, data_name=f"msa_col_attn_{step_no}", subdir_name="msa_col_attn")
             del msa_col_attn
 
         m = add(
@@ -599,10 +605,36 @@ class EvoformerBlock(MSABlock):
             m, _ = input_tensors
         else:
             m = input_tensors[0]
-            
-        print(self.structure_module)
-        print(self.generate_intermediate_structures)
-        print(self.compute_s)
+
+        if self.save_pca_embeddings > 0:
+            z_save = z.clone().cpu()
+            pair_embed_dim = z_save.shape[-1]
+            pair_pc_input = z_save.view(-1, pair_embed_dim)
+            pair_pc = PCA(n_components=self.save_pca_embeddings).fit(pair_pc_input)
+            # Save top K principal components and explained variance ratio
+            logger.save_array_to_npz(pair_pc.components_, f"pair_pc_{step_no}", subdir_name="pca")
+            logger.save_array_to_npz(pair_pc.explained_variance_ratio_, f"pair_pc_explained_ratio_{step_no}", subdir_name="pca")
+            # Perform Same for top 2 Principle Components
+            pair_pc_input = z_save.view(-1, pair_embed_dim)
+            pair_pc = PCA(n_components=2).fit(pair_pc_input)
+            # Reduce to 2 dimensions for visualization
+            pair_pc_reduced = pair_pc.fit_transform(pair_pc_input)
+            logger.save_array_to_npz(pair_pc_reduced, f"pair_pc_two_dim_{step_no}", subdir_name="pca")
+
+            s = self.compute_s(m[..., 0, :, :])
+            s_save = s.clone().cpu()
+            single_pc = PCA(n_components=self.save_pca_embeddings).fit(s_save)
+            # Save top K principal components and explained variance ratio
+            logger.save_array_to_npz(single_pc.components_, f"single_pc_{step_no}", subdir_name="pca")
+            logger.save_array_to_npz(single_pc.explained_variance_ratio_, f"single_pc_explained_ratio_{step_no}", subdir_name="pca")
+            # Perform Same for top 2 Principle Components
+            single_pc = PCA(n_components=2).fit(s_save)
+            # Reduce to 2 dimensions for visualization
+            single_pc_reduced = single_pc.transform(s_save)
+            logger.save_array_to_npz(single_pc_reduced, f"single_pc_two_dim_{step_no}", subdir_name="pca")
+
+            del z_save, s_save
+
         if self.generate_intermediate_structures:
             s_inputs = {}
             n_seq = feats["msa_feat"].shape[-3]
@@ -619,8 +651,106 @@ class EvoformerBlock(MSABlock):
             int_atom_pos = atom14_to_atom37(
                 sm["positions"][-1], feats
             )
-            logger.save_tensor_to_npz(int_atom_pos, data_name=f"atom_positions_subcycle={step_no}", subdir_name="atom_positions")
+            # logger.save_tensor_to_npz(int_atom_pos, data_name=f"atom_positions_subcycle={step_no}", subdir_name="atom_positions")
+            logger.save_atoms_to_pdb(int_atom_pos, feats, step_no, subdir_name="pdbs")
+            logger.save_intermediate_dict(s_inputs, feats, step_no, subdir_name="intermediate_checkpoints")
 
+        return m, z
+
+class EvoformerBlockMMCWrapper(EvoformerBlock):
+    def __init__(self, mmc_mode=False, mmc_temp=300.0, mmc_pH=7.0, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.mmc_mode = mmc_mode
+        self.structure_module = None  # Will be set via set_structure_module
+        self.mmc_temp = mmc_temp
+        self.mmc_pH = mmc_pH
+
+    def prepare_structure_inputs(self, m, z, **kwargs):
+        """
+        Prepare structure module inputs from MSA and pair embeddings.
+        
+        Args:
+            m: MSA embedding
+            z: Pair embedding
+            kwargs: Additional arguments including feats
+            
+        Returns:
+            Dictionary of structure module inputs
+        """
+        if self.structure_module is None:
+            raise ValueError("Structure module must be set before using MMC mode")
+
+        # Extract relevant inputs from kwargs
+        feats = kwargs.get("feats")
+        
+        s_inputs = {}
+        n_seq = feats["msa_feat"].shape[-3]
+        s_inputs["msa"] = m[..., :n_seq, :, :]
+        s_inputs["pair"] = z
+        s_inputs["single"] = self.compute_s(m[..., 0, :, :])
+        
+        return s_inputs
+
+    def get_atom_positions(self, m, z, **kwargs):
+        """
+        Get atom positions from MSA and pair embeddings.
+        
+        Args:
+            m: MSA embedding
+            z: Pair embedding
+            kwargs: Additional arguments including feats and inplace_safe
+            
+        Returns:
+            Atom positions in atom37 format
+        """
+        feats = kwargs.get("feats")
+        inplace_safe = kwargs.get("inplace_safe", False)
+        
+        s_inputs = self.prepare_structure_inputs(m, z, **kwargs)
+        
+        sm = self.structure_module(
+            s_inputs,
+            feats["aatype"],
+            mask=feats["seq_mask"].to(dtype=s_inputs["single"].dtype),
+            inplace_safe=inplace_safe,
+        )
+        
+        return atom14_to_atom37(sm["positions"][-1], feats)
+
+    def k_prime(self, embeddings, atom_pos_prev, atom_pos_curr):
+        pass
+
+    def forward(self, m, z, **kwargs):
+        if not self.mmc_mode:
+            return super().forward(m, z, **kwargs)
+        
+        # Store previous state
+        m_prev = m.clone()
+        z_prev = z.clone()
+
+        # Run standard forward pass
+        m, z = super().forward(m, z, **kwargs)
+
+        # Prepare structure inputs for both previous and current states
+        s_inputs_prev = self.prepare_structure_inputs(m_prev, z_prev, **kwargs)
+        s_inputs_curr = self.prepare_structure_inputs(m, z, **kwargs)
+        
+        # Get feats from kwargs
+        feats = kwargs.get("feats")
+
+        # Evaluate step using MMC criteria with proper inputs
+        if get_evaluate_step()(
+            s_inputs_prev=s_inputs_prev,
+            s_inputs_curr=s_inputs_curr,
+            structure_module=self.structure_module,
+            feats=feats,
+            temp=self.mmc_temp,
+            pH=self.mmc_pH
+        ):
+            return m, z  # Accept the step
+        
+        # Reject the step and apply k' update
+        m, z = k_prime(m, int_atom_pos_prev, int_atom_pos)
         return m, z
 
 
@@ -847,6 +977,10 @@ class EvoformerStack(nn.Module):
         eps: float,
         clear_cache_between_blocks: bool = False, 
         tune_chunk_size: bool = False,
+        mmc_blocks: int = 0,
+        mmc_temp: float = 300.0,
+        mmc_pH: float = 7.0,
+        save_pca_embeddings: int = 0,
         **kwargs,
     ):
         """
@@ -902,9 +1036,19 @@ class EvoformerStack(nn.Module):
         self.clear_cache_between_blocks = clear_cache_between_blocks
         self.no_blocks = no_blocks
         self.blocks = nn.ModuleList()
+        
+        # MMC configuration - number of blocks from end to apply MMC
+        self.mmc_blocks = mmc_blocks
+        
+        if self.mmc_blocks > no_blocks:
+            raise ValueError(f"mmc_blocks ({self.mmc_blocks}) cannot be greater than total number of blocks ({no_blocks})")
 
-        for _ in range(no_blocks):
-            block = EvoformerBlock(
+        for i in range(no_blocks):
+            # Enable MMC for the last mmc_blocks blocks
+            use_mmc = (i >= (no_blocks - self.mmc_blocks)) if self.mmc_blocks > 0 else False
+            
+            block = EvoformerBlockMMCWrapper(
+                mmc_mode=use_mmc,
                 c_m=c_m,
                 c_z=c_z,
                 c_hidden_msa_att=c_hidden_msa_att,
@@ -922,6 +1066,9 @@ class EvoformerStack(nn.Module):
                 inf=inf,
                 eps=eps,
                 no_blocks=no_blocks,
+                mmc_temp=mmc_temp,
+                mmc_pH=mmc_pH,
+                save_pca_embeddings=save_pca_embeddings,
             )
             self.blocks.append(block)
 
@@ -951,6 +1098,10 @@ class EvoformerStack(nn.Module):
         cycle_no: int,
         logger: WandBLogger = None
     ):
+        
+        # PM: partial initializes everything other than m, z
+        #     rep. MSA/pairwise that flow through the network
+
         blocks = [
             partial(
                 b,
@@ -1104,19 +1255,12 @@ class EvoformerStack(nn.Module):
         if(not torch.is_grad_enabled()):
             blocks_per_ckpt = None
 
-        # add intermed to return
+        # PM: Checkpointing really applies for training -- should not impact us for inference. 
         m, z = checkpoint_blocks(
             blocks,
             args=(m, z),
             blocks_per_ckpt=blocks_per_ckpt,
-            # im_outputs = output_intermed_structs
         )
-
-        # XXX/interstructs (m, z), intermed_outputs = checkpoint_blocks(
-        #     blocks,
-        #     args=(m, z),
-        #     blocks_per_ckpt=blocks_per_ckpt,
-        # )
 
         s = self.linear(m[..., 0, :, :])
 

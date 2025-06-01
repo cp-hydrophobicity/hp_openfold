@@ -96,5 +96,5 @@ def superimpose(reference, coords, mask):
     rmsds_reshaped = rmsds_stacked.reshape(
         batch_dims
     )
-
+    
     return superimposed_reshaped, rmsds_reshaped

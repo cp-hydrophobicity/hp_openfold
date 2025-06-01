@@ -63,6 +63,7 @@ def load_models_from_command_line(config, model_device, openfold_checkpoint_path
             model_version = "_".join(model_basename.split("_")[1:])
             model = AlphaFold(config)
             model = model.eval()
+            logger.info(f"model {model_basename} loaded from {path} version {model_version}")
             import_jax_weights_(
                 model, path, version=model_version
             )
