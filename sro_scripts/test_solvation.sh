@@ -12,8 +12,8 @@
 ## Provide a job name
 #SBATCH -J solvation_test
 
-#SBATCH -o ../output/slurm_out/solvation_test_%A_%a.out
-#SBATCH -e ../output/slurm_out/solvation_test_%A_%a.err
+#SBATCH -o ../output_mmc/logs/slurm_out/solvation_test_%A_%a.out
+#SBATCH -e ../output_mmc/logs/slurm_out/solvation_test_%A_%a.err
 
 # Set up directories
 GPFS_DIR="/gpfs/data/rsingh47/hp_protein_folding/protein_folding"

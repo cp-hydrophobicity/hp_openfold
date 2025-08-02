@@ -1,5 +1,3 @@
-"""Utilities for protein protonation at specific pH values."""
-
 import os
 import logging
 import subprocess
@@ -9,9 +7,7 @@ from pathlib import Path
 from typing import Dict, Any, Optional, Set, Tuple, List
 from openfold.utils.md.utils import work_dir
 
-# set up logging
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
 
 
 def get_atom_info(pdb_file: str) -> Set[Tuple[str, str, str, str]]:

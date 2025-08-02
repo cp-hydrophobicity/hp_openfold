@@ -14,7 +14,7 @@ BASE_DATA_DIR="$GPFS_DIR/data"
 TEMPLATE_MMCIF_DIR="$BASE_DATA_DIR/mmcif"
 
 # Set the paths below as appropriate
-FASTA_SPLIT_DIR="$BASE_DATA_DIR/test/fasta/pdb70_fasta"
+FASTA_SPLIT_DIR="$BASE_DATA_DIR/fasta/pdb70_fasta"
 OUTPUT_DIR="$BASE_DATA_DIR/precomputed_alignments"
 FASTA_DIR_I="$FASTA_SPLIT_DIR/group$SLURM_ARRAY_TASK_ID"
 

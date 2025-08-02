@@ -11,8 +11,8 @@
 ## Provide a job name
 #SBATCH -J colinoscopy
 
-#SBATCH -o ../output/slurm_out/colinoscopy_test_%A_%a.out
-#SBATCH -e ../output/slurm_out/colinoscopy_test_%A_%a.err
+#SBATCH -o ../output_mmc/logs/slurm_out/colinoscopy_test_%A_%a.out
+#SBATCH -e ../output_mmc/logs/slurm_out/colinoscopy_test_%A_%a.err
 
 # module purge
 # module load miniforge
@@ -32,10 +32,10 @@ TEMPLATE_MMCIF_DIR="$BASE_DATA_DIR/mmcif"
 
 # Subdirectories for input FASTA files
 INPUT_FASTA_DIRS=(
-    "$BASE_DATA_DIR/test/fasta/2Y3C_A"
-    # "$GPFS_DIR/data/test/fasta/6kwc_mut/gpu0"
-    # "$GPFS_DIR/data/test/fasta/6kwc_mut/gpu1"
-    # "$GPFS_DIR/data/test/fasta/6kwc_mut/gpu2"
+    "$BASE_DATA_DIR/fasta/2Y3C_A"
+    # "$GPFS_DIR/data/fasta/6kwc_mut/gpu0"
+    # "$GPFS_DIR/data/fasta/6kwc_mut/gpu1"
+    # "$GPFS_DIR/data/fasta/6kwc_mut/gpu2"
 )
 
 # Output directories corresponding to each input

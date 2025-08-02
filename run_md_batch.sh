@@ -10,8 +10,8 @@
 ## Provide a job name
 #SBATCH -J md_batch
 
-#SBATCH -o ../output/slurm_out/md_batch_%A.out
-#SBATCH -e ../output/slurm_out/md_batch_%A.err
+#SBATCH -o ../output_mmc/logs/slurm_out/md_batch_%A.out
+#SBATCH -e ../output_mmc/logs/slurm_out/md_batch_%A.err
 
 # module purge
 # module load miniforge

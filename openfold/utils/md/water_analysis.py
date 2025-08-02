@@ -1,5 +1,3 @@
-"""Utilities for analyzing water molecules in molecular dynamics simulations."""
-
 import logging
 import numpy as np
 from typing import Dict, Any, Sequence, Tuple, List
@@ -8,15 +6,6 @@ from openmm import app as openmm_app
 from Bio import PDB
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-
-ch = logging.StreamHandler()
-ch.setLevel(logging.INFO)
-
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-ch.setFormatter(formatter)
-
-logger.addHandler(ch)
 
 
 def analyze_water_density_fluctuations(

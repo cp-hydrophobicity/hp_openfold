@@ -1,35 +1,23 @@
-"""General utilities for molecular dynamics simulations."""
-
-import os
-import logging
 import contextlib
 import tempfile
 from pathlib import Path
+import logging
+import time
 
-# set up logging
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-
-# create console handler with a higher log level
-ch = logging.StreamHandler()
-ch.setLevel(logging.INFO)
-
-# create formatter and add it to the handler
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-ch.setFormatter(formatter)
-
-# add the handler to the logger
-logger.addHandler(ch)
-
 
 @contextlib.contextmanager
 def work_dir(output_dir: str, prefix: str = 'md_work_'):
     """Context manager for creating and managing a working directory.
     
     Args:
-        output_dir: Base output directory where work directory will be created
+        output_dir: Base output directory
         prefix: Prefix for the work directory name
+    
+    Returns:
+        None
     """
+
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     
     work_path = Path(output_dir) / f"{prefix}{next(tempfile._get_candidate_names())}"

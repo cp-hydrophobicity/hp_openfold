@@ -1,6 +1,3 @@
-#!/usr/bin/env python3
-"""Utilities for calculating energy and forces of protein structures."""
-
 import os
 import logging
 import time
@@ -20,7 +17,6 @@ logger = logging.getLogger(__name__)
 
 
 def log_time(step_name, start_time):
-    """Log the time taken for a step."""
     elapsed = time.time() - start_time
     logger.info(f"TIMING: {step_name} took {elapsed:.2f} seconds")
 

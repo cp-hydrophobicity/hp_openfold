@@ -1,8 +1,8 @@
 #!/bin/bash
 
 #SBATCH --job-name=mmc_refinement_inference
-#SBATCH --output=../output_mmc/example_logs/inference_%j.out
-#SBATCH --error=../output_mmc/example_logs/inference_%j.err
+#SBATCH --output=../output_mmc/logs/mc_inference_logs/mc_inference_%j.out
+#SBATCH --error=../output_mmc/logs/mc_inference_logs/mc_inference_%j.err
 
 #SBATCH -p gpu --gres=gpu:1
 #SBATCH -N 1
@@ -24,7 +24,7 @@ CUDA_VISIBLE_DEVICES=0
 # Set defaults
 CHECKPOINT_PATH="/gpfs/data/rsingh47/hp_protein_folding/protein_folding/output_mmc/refinement_model/p7_ph5_lr_2e-3_tri_prior/checkpoint_epoch_2.pt"
 INPUT_DIR="/gpfs/data/rsingh47/hp_protein_folding/protein_folding/output_mmc/example/in"
-OUTPUT_DIR="/gpfs/data/rsingh47/hp_protein_folding/protein_folding/output_mmc/example/out_fixed_restraints"
+OUTPUT_DIR="/gpfs/data/rsingh47/hp_protein_folding/protein_folding/output_mmc/multi_cycle_example/out"
 SIMPLE_MODEL=false
 TEMPERATURE=300.0
 CONFIG_PRESET="model_3"
@@ -40,6 +40,9 @@ C_HIDDEN_ATT=32
 NO_HEADS_PAIR=4
 NO_HEADS_SINGLE=4
 NUM_CYCLES=3
+
+# Number of iterations for MMC minimization
+NUM_ITERATIONS=3
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -112,6 +115,10 @@ while [[ $# -gt 0 ]]; do
       USE_CPU=true
       shift
       ;;
+    --num_iterations)
+      NUM_ITERATIONS="$2"
+      shift 2
+      ;;
     *)
       echo "Unknown option: $1"
       exit 1
@@ -161,6 +168,7 @@ CMD="$CMD --c_hidden_att $C_HIDDEN_ATT"
 CMD="$CMD --no_heads_pair $NO_HEADS_PAIR"
 CMD="$CMD --no_heads_single $NO_HEADS_SINGLE"
 CMD="$CMD --num_cycles $NUM_CYCLES"
+CMD="$CMD --num_iterations $NUM_ITERATIONS"
 
 # Add simulation parameters
 CMD="$CMD --temperature $TEMPERATURE --pH $PH"

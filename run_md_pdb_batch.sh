@@ -10,8 +10,8 @@
 ## Provide a job name
 #SBATCH -J pdb70_md
 
-#SBATCH -o ../output_mmc/md_slurm_out/pdb70_md_%A_%a.out
-#SBATCH -e ../output_mmc/md_slurm_out/pdb70_md_%A_%a.err
+#SBATCH -o ../output_mmc/logs/md_slurm_out/pdb70_md_%A_%a.out
+#SBATCH -e ../output_mmc/logs/md_slurm_out/pdb70_md_%A_%a.err
 
 GPFS_DIR="/gpfs/data/rsingh47/hp_protein_folding/protein_folding"
 BASE_DATA_DIR="$GPFS_DIR/data"
@@ -20,7 +20,7 @@ TEMPLATE_MMCIF_DIR="$BASE_DATA_DIR/mmcif"
 # get the current group number from the SLURM array task ID
 GROUP_NUM=$SLURM_ARRAY_TASK_ID
 
-INPUT_FASTA_DIR="$BASE_DATA_DIR/test/fasta/pdb70_fasta/group${GROUP_NUM}"
+INPUT_FASTA_DIR="$BASE_DATA_DIR/fasta/pdb70_fasta/group${GROUP_NUM}"
 OUTPUT_DIR="$GPFS_DIR/output_mmc"
 PRECOMPUTED_ALIGNMENTS="$BASE_DATA_DIR/precomputed_alignments"
 

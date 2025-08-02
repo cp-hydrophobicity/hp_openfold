@@ -12,8 +12,8 @@
 ## Provide a job name
 #SBATCH -J pdb70_inference_md
 
-#SBATCH -o ../output_mmc/slurm_out/pdb70_inference_md_%A_%a.out
-#SBATCH -e ../output_mmc/slurm_out/pdb70_inference_md_%A_%a.err
+#SBATCH -o ../output_mmc/logs/slurm_out/pdb70_inference_md_%A_%a.out
+#SBATCH -e ../output_mmc/logs/slurm_out/pdb70_inference_md_%A_%a.err
 
 # module purge
 # module load miniforge
@@ -31,7 +31,7 @@ TEMPLATE_MMCIF_DIR="$BASE_DATA_DIR/mmcif"
 
 GROUP_NUM=$SLURM_ARRAY_TASK_ID
 
-INPUT_FASTA_DIR="$BASE_DATA_DIR/test/fasta/pdb70_fasta/group${GROUP_NUM}"
+INPUT_FASTA_DIR="$BASE_DATA_DIR/fasta/pdb70_fasta/group${GROUP_NUM}"
 OUTPUT_DIR="$GPFS_DIR/output_mmc/pca_predictions"
 mkdir -p "$OUTPUT_DIR"
 PRECOMPUTED_ALIGNMENTS="$BASE_DATA_DIR/precomputed_alignments"

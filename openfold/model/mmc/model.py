@@ -14,6 +14,9 @@ from openfold.np import protein
 
 from openfold.utils.tensor_utils import tensor_tree_map
 
+import logging
+logger = logging.getLogger(__name__)
+
 def log_memory(step_name):
     if torch.cuda.is_available():
         # Get the current device
@@ -28,7 +31,7 @@ def log_memory(step_name):
         memory_reserved = torch.cuda.memory_reserved(device) / (1024 ** 2)    # MB
         max_memory = torch.cuda.max_memory_allocated(device) / (1024 ** 2)    # MB
         
-        print(f"[Rank {local_rank}, Device {device}] {step_name}: Allocated: {memory_allocated:.2f}MB | Reserved: {memory_reserved:.2f}MB | Max: {max_memory:.2f}MB")
+        logger.info(f"[Rank {local_rank}, Device {device}] {step_name}: Allocated: {memory_allocated:.2f}MB | Reserved: {memory_reserved:.2f}MB | Max: {max_memory:.2f}MB")
 
 def get_gpu_memory_usage(target_rank=0, target_device=0):
     """Print detailed GPU memory usage statistics for a specific rank/device."""
@@ -74,7 +77,7 @@ def get_gpu_memory_usage(target_rank=0, target_device=0):
     for i, (tensor_type, tensor_shape, tensor_size) in enumerate(tensors[:40]):
         output += f"{i+1}. {tensor_type} {tensor_shape}: {tensor_size / 1024**2:.2f} MB\n"
     
-    print(output)  # Print directly for immediate feedback
+    logger.info(output)  # Print directly for immediate feedback
     return output
 
 def backprop_energy_gradient(structure_module: nn.Module, 
@@ -180,6 +183,7 @@ def backprop_energy_gradient(structure_module: nn.Module,
                     torch.cuda.empty_cache()
 
         # artificially pad gradient to match positions shape
+        # positions contains positions for every step of the structure module -- we only want to backpropagate the last step
         full_grad = torch.zeros_like(positions)
         if external_grad is not None:
             full_grad[-1] = external_grad
@@ -424,108 +428,6 @@ class PairRefinementModule(nn.Module):
         # log_memory("After pair transition")
         
         return delta_z
-
-
-class SingleRefinementModule(nn.Module):
-    """
-    Refinement module for single (sequence) embeddings.
-    """
-    def __init__(
-        self,
-        c_s: int = 384,
-        c_hidden: int = 128,
-        no_heads: int = 4,
-        dropout_rate: float = 0.1,
-        use_forces: bool = True,
-        use_film: bool = True,
-    ):
-        super(SingleRefinementModule, self).__init__()
-        
-        self.c_s = c_s
-        self.use_forces = use_forces
-        
-        # Gradient conditioner (only used if use_forces=True)
-        if use_forces:
-            self.gradient_conditioner = GradientConditioner(c_s, c_hidden, use_film=use_film)
-        
-        # Self-attention for sequence embedding
-        self.self_attention = nn.MultiheadAttention(
-            embed_dim=c_s,
-            num_heads=no_heads,
-            dropout=dropout_rate,
-            batch_first=True
-        )
-        self.layer_norm1 = LayerNorm(c_s)
-        
-        # MLP for residual prediction
-        self.mlp = nn.Sequential(
-            LayerNorm(c_s),
-            Linear(c_s, c_hidden * 4),
-            nn.ReLU(),
-            Linear(c_hidden * 4, c_s)
-        )
-        
-    def forward(
-        self,
-        single_embed: torch.Tensor,
-        single_grad: Optional[torch.Tensor] = None,
-        mask: Optional[torch.Tensor] = None,
-    ) -> torch.Tensor:
-        """
-        Forward pass to refine single embeddings.
-        
-        Args:
-            single_embed: Single embedding tensor [batch, N_res, c_s]
-            single_grad: Single gradient tensor [batch, N_res, c_s] (optional if use_forces=False)
-            mask: Optional mask tensor [batch, N_res]
-            
-        Returns:
-            Residual update for single embedding [batch, N_res, c_s]
-        """
-        if self.use_forces:
-            # Apply gradient conditioning
-            # log_memory("Before single gradient conditioning")
-            if single_grad is None:
-                raise ValueError("single_grad cannot be None when use_forces=True")
-                
-            s = self.gradient_conditioner(single_embed, single_grad)
-            
-            # After conditioning, we no longer need the original single_grad
-            del single_grad
-            torch.cuda.empty_cache()  # Force CUDA to release memory
-            # log_memory("After single gradient conditioning")
-        else:
-            # Skip gradient conditioning when not using forces
-            s = single_embed
-        
-        # Apply self-attention
-        # log_memory("Before single self-attention")
-        if mask is not None:
-            attn_mask = ~mask.bool()
-        else:
-            attn_mask = None
-            
-        s_norm = self.layer_norm1(s)
-        s_attn, attn_weights = self.self_attention(
-            s_norm, s_norm, s_norm,
-            key_padding_mask=attn_mask
-        )
-        
-        # Free memory from normalized tensor and attention weights
-        del s_norm, attn_weights
-        
-        s = s + s_attn
-        
-        # Free memory from attention output
-        del s_attn
-        
-        # Apply MLP for residual prediction
-        delta_s = self.mlp(s)
-        
-        # Free memory from intermediate tensor
-        del s
-        
-        return delta_s
 
 
 class SimpleMMCRefinementModel(nn.Module):
@@ -813,35 +715,20 @@ class MMCRefinementModel(nn.Module):
         Args:
             structure_module: Frozen structure module that maps embeddings to 3D coordinates
             c_z: Pair embedding channel dimension
-            c_s: Single embedding channel dimension
+            c_s: Single embedding channel dimension (deprecated)
             c_hidden_mul: Hidden dimension in triangle multiplication
             c_hidden_att: Hidden dimension in attention modules
             no_heads_pair: Number of attention heads for pair attention
-            no_heads_single: Number of attention heads for single attention
+            no_heads_single: Number of attention heads for single attention (deprecated)
             transition_n: Factor for hidden dimension in transition layers
             dropout_rate: Dropout rate
-            num_cycles: Number of refinement cycles
+            num_cycles: Number of refinement cycles (deprecated)
             decay_factors: List of decay factors for each cycle (default: [1.0, 0.5, 0.25])
         """
         super().__init__()
         
         self.c_z = c_z
-        # self.c_s = c_s
-        self.num_cycles = num_cycles
-        
-        # Set default decay factors if not provided
-        if decay_factors is None and num_cycles == 3:
-            self.decay_factors = [1.0, 0.5, 0.25]
-        elif decay_factors is None and num_cycles == 2:
-            self.decay_factors = [1.0, 0.33]
-        elif decay_factors is None and num_cycles == 1:
-            self.decay_factors = [1.0]
-        else:
-            self.decay_factors = decay_factors
-            
-        # Ensure we have enough decay factors
-        if len(self.decay_factors) != num_cycles:
-            raise ValueError(f"Need exactly {num_cycles} decay factors, got {len(self.decay_factors)}")
+        self.num_cycles = num_cycles # deprecated / unused variable
         
         # Store the frozen structure module
         self.structure_module = structure_module
@@ -864,16 +751,6 @@ class MMCRefinementModel(nn.Module):
             use_forces=use_forces,
             use_film=use_film,
         )
-        
-        # Create a single single refinement module to be shared across all cycles
-        # self.single_refinement_module = SingleRefinementModule(
-        #     c_s=c_s,
-        #     c_hidden=c_hidden_att,
-        #     no_heads=no_heads_single,
-        #     dropout_rate=dropout_rate,
-        #     use_forces=use_forces,
-        #     use_film=use_film,
-        # )
         
         # Initialize weights
         self.initialize_weights()

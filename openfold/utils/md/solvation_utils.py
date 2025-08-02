@@ -1,5 +1,3 @@
-"""Utilities for protein solvation and system preparation."""
-
 import os
 import io
 import logging
@@ -11,10 +9,7 @@ from pathlib import Path
 from typing import Dict, Any, Tuple, List
 from openfold.utils.md.utils import work_dir
 
-
-# set up logging
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
 
 class GromacsUtils:
     """Class for handling GROMACS-based solvation and system preparation."""

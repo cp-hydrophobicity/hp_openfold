@@ -15,17 +15,13 @@ import random
 import numpy as np
 import time
 
-# Import required OpenFold modules
 from openfold.data import templates, data_pipeline
 from openfold.data.tools import hhsearch, hmmsearch
 from openfold.utils.script_utils import parse_fasta
 
 from scripts.utils import add_data_args
-
-logging.basicConfig()
-logger = logging.getLogger(__file__)
-logger.setLevel(logging.INFO)
-
+from log_utils import configure_logging
+logger = configure_logging()
 
 def precompute_alignments(tags, seqs, alignment_dir, args):
     for tag, seq in zip(tags, seqs):
@@ -122,6 +118,5 @@ if __name__ == "__main__":
     add_data_args(parser)
 
     args = parser.parse_args()
-
 
     main(args)

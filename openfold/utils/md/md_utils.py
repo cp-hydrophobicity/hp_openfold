@@ -1,5 +1,3 @@
-"""Utilities for performing Molecular Dynamics simulations on protein structures."""
-
 import io
 import os
 import logging
@@ -22,7 +20,6 @@ from openfold.utils.md.solvation_utils import GromacsUtils, strip_solvent_from_p
 from openfold.utils.md.utils import work_dir
 from openfold.utils.md.protonation_utils import ProtonationUtils, remove_all_cleaned
 
-# set up logging
 logger = logging.getLogger(__name__)
 
 class MolecularDynamics:

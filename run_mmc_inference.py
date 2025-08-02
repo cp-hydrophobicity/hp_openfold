@@ -381,26 +381,50 @@ def run_inference(args):
             n_res = pair_embed.shape[0]
             batch['feats']['pair_mask'] = torch.ones((n_res, n_res), device=device)
         
-        # Run inference with the refinement model
+        # Run inference with the refinement model multiple times if requested
         with torch.no_grad():
             print(pair_embed.size(), single_embed.size())
-            output = refinement_model(
-                pair_embed=pair_embed,
-                single_embed=single_embed,
-                feats=batch['feats'],
-                pair_mask=batch['feats'].get('pair_mask', None),
-                seq_mask=batch['feats'].get('seq_mask', None),
-                external_grad=batch['feats'].get('forces', None),
-                temperature=args.temperature,
-                pH=args.pH,
-                inplace_safe=True,
-                output_dir=args.output_dir,
-            )
             
+            # Store original output before any refinement
             orig_output = structure_module({'pair': pair_embed, 'single': single_embed}, batch['feats']["aatype"] if "aatype" in batch['feats'] else None, mask=batch['feats']["seq_mask"], inplace_safe=True)
             
-            # Get final atom positions
-            final_atom_pos = output['positions'][-1]
+            # Track energy trajectory across iterations
+            energy_trajectory = []
+            current_pair_embed = pair_embed
+            current_single_embed = single_embed
+            
+            # Store all outputs for each iteration
+            all_outputs = []
+            
+            logger.info(f"Running refinement for {args.num_iterations} iterations")
+            
+            for iteration in range(args.num_iterations):
+                logger.info(f"Iteration {iteration+1}/{args.num_iterations}")
+                
+                # Run the refinement model
+                output = refinement_model(
+                    pair_embed=current_pair_embed,
+                    single_embed=current_single_embed,
+                    feats=batch['feats'],
+                    pair_mask=batch['feats'].get('pair_mask', None),
+                    seq_mask=batch['feats'].get('seq_mask', None),
+                    external_grad=batch['feats'].get('forces', None),
+                    temperature=args.temperature,
+                    pH=args.pH,
+                    inplace_safe=True,
+                    output_dir=args.output_dir,
+                )
+                
+                all_outputs.append(output)
+                
+                # Use the refined embeddings for the next iteration
+                if iteration < args.num_iterations - 1:
+                    current_pair_embed = output['pair']
+                    current_single_embed = output['single']
+            
+            # Get final atom positions from the last iteration
+            final_output = all_outputs[-1]
+            final_atom_pos = final_output['positions'][-1]
             orig_atom_pos = orig_output['positions'][-1]
             
             try:
@@ -450,15 +474,8 @@ def run_inference(args):
             logger.info(f"Saved structures to {output_pdb_path}, {orig_output_pdb_path}")
 
             from openfold.utils.md.energy_utils import calculate_energy
-            new_energy = calculate_energy(
-                protein_obj, 
-                os.path.join(args.output_dir, f"energy_{os.path.splitext(os.path.basename(input_file))[0]}_new"), 
-                pH=args.pH,
-                restraint_atoms="none",
-                stiffness=10.0,  # moderate stiffness for minimization
-                save_relaxed_pdb=True
-            )
             
+            # Calculate energy for original structure
             old_energy = calculate_energy(
                 orig_protein_obj, 
                 os.path.join(args.output_dir, f"energy_{os.path.splitext(os.path.basename(input_file))[0]}_old"), 
@@ -468,8 +485,70 @@ def run_inference(args):
                 save_relaxed_pdb=True
             )
             
-            logger.info(f"NEW ENERGY: {new_energy}")
-            logger.info(f"OLD ENERGY: {old_energy}")
+            # Calculate energy for final structure
+            new_energy = calculate_energy(
+                protein_obj, 
+                os.path.join(args.output_dir, f"energy_{os.path.splitext(os.path.basename(input_file))[0]}_new"), 
+                pH=args.pH,
+                restraint_atoms="none",
+                stiffness=10.0,  # moderate stiffness for minimization
+                save_relaxed_pdb=True
+            )
+            
+            logger.info(f"ORIGINAL ENERGY: {old_energy}")
+            logger.info(f"FINAL ENERGY: {new_energy}")
+            
+            # Calculate and save energy trajectory if multiple iterations were run
+            if args.num_iterations > 1:
+                energy_trajectory = [old_energy]  # Start with original energy
+                
+                # Create intermediate protein objects and calculate energies for each iteration
+                for i, iter_output in enumerate(all_outputs):
+                    if i < len(all_outputs) - 1:  # Skip the last one as we already calculated it
+                        iter_atom_pos = iter_output['positions'][-1]
+                        try:
+                            iter_atom37_positions = atom14_to_atom37(iter_atom_pos, batch['feats']).detach().cpu().numpy()
+                            
+                            iter_protein_obj = create_protein_from_prediction(
+                                atom_positions=iter_atom37_positions,
+                                atom_mask=atom37_mask,
+                                aatype=aatype,
+                                residue_index=residue_index
+                            )
+                            
+                            # Save intermediate PDB
+                            iter_output_pdb_path = os.path.join(args.output_dir, f"{os.path.splitext(os.path.basename(input_file))[0]}_iter{i+1}.pdb")
+                            with open(iter_output_pdb_path, 'w') as f:
+                                f.write(protein.to_pdb(iter_protein_obj))
+                            
+                            # Calculate energy
+                            iter_energy = calculate_energy(
+                                iter_protein_obj, 
+                                os.path.join(args.output_dir, f"energy_{os.path.splitext(os.path.basename(input_file))[0]}_iter{i+1}"), 
+                                pH=args.pH,
+                                restraint_atoms="none",
+                                stiffness=10.0,
+                                save_relaxed_pdb=True
+                            )
+                            
+                            energy_trajectory.append(iter_energy)
+                            logger.info(f"ITERATION {i+1} ENERGY: {iter_energy}")
+                            
+                        except Exception as e:
+                            logger.error(f"Error calculating energy for iteration {i+1}: {str(e)}")
+                
+                # Add the final energy to complete the trajectory
+                energy_trajectory.append(new_energy)
+                
+                # Save energy trajectory to file
+                trajectory_file = os.path.join(args.output_dir, f"{os.path.splitext(os.path.basename(input_file))[0]}_energy_trajectory.txt")
+                with open(trajectory_file, 'w') as f:
+                    f.write("Iteration,Energy\n")
+                    for i, energy in enumerate(energy_trajectory):
+                        f.write(f"{i},{energy}\n")
+                
+                logger.info(f"Energy trajectory saved to {trajectory_file}")
+                logger.info(f"Energy trajectory: {energy_trajectory}")
 
 
 def main():
@@ -498,6 +577,7 @@ def main():
     # Simulation parameters
     parser.add_argument("--temperature", type=float, default=300.0, help="Temperature in Kelvin")
     parser.add_argument("--pH", type=float, default=7.0, help="pH for energy calculations")
+    parser.add_argument("--num_iterations", type=int, default=1, help="Number of times to run the refinement model sequentially")
     
     # Misc
     parser.add_argument("--cpu", action="store_true", help="Force using CPU even if CUDA is available")
