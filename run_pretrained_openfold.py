@@ -46,6 +46,7 @@ from openfold.data.tools import hhsearch, hmmsearch
 from openfold.np import protein
 from openfold.utils.script_utils import (load_models_from_command_line, parse_fasta, run_model,
                                          prep_output, relax_protein)
+from openfold.model.sro.core import load_sro_model
 from openfold.utils.tensor_utils import tensor_tree_map
 from openfold.utils.trace_utils import (
     pad_feature_dict_seq,
@@ -186,9 +187,11 @@ def main(args):
         long_sequence_inference=args.long_sequence_inference,
         use_deepspeed_evoformer_attention=args.use_deepspeed_evoformer_attention,
         output_intermed_structs=args.output_intermed_structs,
-        mmc_mode=args.mmc_mode,
-        mmc_temp=args.mmc_temp,
-        mmc_pH=args.mmc_pH,
+        sro_blocks=args.sro_blocks,
+        sro_temp=args.sro_temp,
+        sro_pH=args.sro_pH,
+        sro_step_eval=args.sro_step_eval,
+        sro_model_path=args.sro_model_path,
         save_pca_embeddings=args.save_pca_embeddings,
     )
 
@@ -352,7 +355,7 @@ def main(args):
                     )
                     cur_tracing_interval = rounded_seqlen
 
-            out = run_model(model, processed_feature_dict, tag, seq_output_dir, logger, wb_logger)
+            out = run_model(model, processed_feature_dict, tag, seq_output_dir, logger, wb_logger, args)
             wb_logger.finish()
 
             # Toss out the recycling dimensions --- we don't need them anymore
@@ -531,16 +534,30 @@ if __name__ == "__main__":
         help="Whether or not to dump intermediate npz atomic pos",
     )
     parser.add_argument(
-        "--mmc_mode", type=int, default=0,
-        help="Number of blocks from the end to apply MMC (0 disables MMC)",
+        "--sro_blocks", type=int, default=0,
+        help="Number of blocks from the end to apply SRO (0 disables SRO)",
+    )
+
+    parser.add_argument(
+        "--sro_model_path", type=str, default=None,
+        help="Path to SRO model checkpoint",
+    )
+
+    parser.add_argument(
+        "--sro_model_config_path", type=str, default=None,
+        help="Path to SRO model config",
     )
     parser.add_argument(
-        "--mmc_temp", type=float, default=300.0,
-        help="Temperature for MMC (default: 300.0)",
+        "--sro_temp", type=float, default=300.0,
+        help="Temperature for SRO (default: 300.0)",
     )
     parser.add_argument(
-        "--mmc_pH", type=float, default=7.0,
-        help="pH for MMC (default: 7.0)",
+        "--sro_pH", type=float, default=7.0,
+        help="pH for SRO (default: 7.0)",
+    )
+    parser.add_argument(
+        "--sro_step_eval", action="store_true", default=False,
+        help="Whether to evaluate SRO at each step, choosing embedding yielding lower energy (default: False)",
     )
     parser.add_argument(
         "--save_pca_embeddings", type=int, default=0,

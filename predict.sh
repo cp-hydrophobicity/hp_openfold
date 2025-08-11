@@ -11,8 +11,8 @@
 ## Provide a job name
 #SBATCH -J colinoscopy
 
-#SBATCH -o ../output_mmc/logs/slurm_out/colinoscopy_test_%A_%a.out
-#SBATCH -e ../output_mmc/logs/slurm_out/colinoscopy_test_%A_%a.err
+#SBATCH -o ../output/logs/slurm_out/colinoscopy_test_%A_%a.out
+#SBATCH -e ../output/logs/slurm_out/colinoscopy_test_%A_%a.err
 
 # module purge
 # module load miniforge

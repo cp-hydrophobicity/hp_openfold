@@ -66,9 +66,10 @@ def model_config(
     use_deepspeed_evoformer_attention=False,
     output_intermed_structs=False,
     save_pca_embeddings=0,
-    mmc_mode=0,
-    mmc_temp=300,
-    mmc_pH=7.0,
+    sro_blocks=0,
+    sro_temp=300,
+    sro_pH=7.0,
+    sro_step_eval=False,
 ):
     c = copy.deepcopy(config)
     # TRAINING PRESETS
@@ -245,13 +246,15 @@ def model_config(
 
     c.model.output_intermed_structs = output_intermed_structs
     c.model.evoformer_stack.save_pca_embeddings = save_pca_embeddings
-    # Add MMC configuration - mmc_mode specifies number of blocks from end
-    c.model.evoformer_stack.mmc_blocks = mmc_mode
-    if mmc_mode > 0 and mmc_mode > c.model.evoformer_stack.no_blocks:
-        raise ValueError(f"mmc_mode ({mmc_mode} blocks) cannot be greater than total number of blocks ({c.model.evoformer_stack.no_blocks})")
+    # Add SRO configuration - sro_mode specifies number of blocks from end
+    c.model.evoformer_stack.sro_mode = sro_blocks > 0
+    c.model.evoformer_stack.sro_blocks = sro_blocks
+    if sro_blocks > 0 and sro_blocks > c.model.evoformer_stack.no_blocks:
+        raise ValueError(f"sro_blocks ({sro_blocks} blocks) cannot be greater than total number of blocks ({c.model.evoformer_stack.no_blocks})")
 
-    c.model.evoformer_stack.mmc_temp = mmc_temp
-    c.model.evoformer_stack.mmc_pH = mmc_pH
+    c.model.evoformer_stack.sro_temp = sro_temp
+    c.model.evoformer_stack.sro_pH = sro_pH
+    c.model.evoformer_stack.sro_step_eval = sro_step_eval
 
     if use_deepspeed_evoformer_attention:
         c.globals.use_deepspeed_evo_attention = True 
@@ -624,7 +627,7 @@ config = mlc.ConfigDict(
                 "tune_chunk_size": tune_chunk_size,
                 "inf": 1e9,
                 "eps": eps,  # 1e-10,
-                "mmc_blocks": 0,
+                "sro_blocks": 0,
             },
             "structure_module": {
                 "c_s": c_s,

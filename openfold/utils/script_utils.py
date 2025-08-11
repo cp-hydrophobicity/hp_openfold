@@ -147,7 +147,7 @@ def update_timings(timing_dict, output_file=os.path.join(os.getcwd(), "timings.j
     return output_file
 
 
-def run_model(model, batch, tag, output_dir, logger, wb_logger):
+def run_model(model, batch, tag, output_dir, logger, wb_logger, args):
     with torch.no_grad():
         # Temporarily disable templates if there aren't any in the batch
         template_enabled = model.config.template.enabled
@@ -165,6 +165,26 @@ def run_model(model, batch, tag, output_dir, logger, wb_logger):
             structure_module=model.structure_module, 
             generate_intermediates=model.config.output_intermed_structs,
         )
+
+        if args.sro_blocks > 0:
+            if args.sro_model_path is None:
+                raise ValueError("--sro_model_path must be specified if --sro_blocks is > 0")
+            if args.sro_model_config_path is None:
+                raise ValueError("--sro_model_config_path must be specified if --sro_blocks is > 0")
+
+            sro_model = load_sro_model(
+                model_param_dict=args.sro_model_config_path,
+                structure_module=model.structure_module,
+                aux_heads=model.aux_heads,
+                model_path=args.sro_model_path,
+            )
+
+            model.evoformer.initialize_sro(
+                sro_model=sro_model, 
+                sro_temp=model.config.evoformer.sro_temp,
+                sro_pH=model.config.evoformer.sro_pH,
+                sro_step_eval=model.config.evoformer.sro_step_eval
+            )
 
         out = model(batch, wb_logger)
         inference_time = time.perf_counter() - t
