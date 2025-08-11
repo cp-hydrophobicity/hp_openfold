@@ -9,7 +9,7 @@ from openfold.model.triangular_attention import TriangleAttention, TriangleAtten
 from openfold.model.triangular_multiplicative_update import TriangleMultiplicationOutgoing, TriangleMultiplicationIncoming
 from openfold.model.pair_transition import PairTransition
 from openfold.model.primitives import Linear, LayerNorm
-from openfold.model.mmc.core import evaluate_step, convert_forces_to_a14
+from openfold.model.sro.core import evaluate_step, convert_forces_to_a14
 from openfold.np import protein
 
 from openfold.utils.tensor_utils import tensor_tree_map
@@ -430,279 +430,19 @@ class PairRefinementModule(nn.Module):
         return delta_z
 
 
-class SimpleMMCRefinementModel(nn.Module):
+class SubspaceRelaxationOperator(nn.Module):
     """
-    Simple Subspace Correction model for protein structure refinement.
-    
-    This model uses the provided GradientConditioner modules to predict residual (delta) updates
-    to the pair and single embeddings based solely on the energy gradients. The predicted residuals
-    (delta embeddings) are then scaled by decay factors and added to the current embeddings for refinement.
+    Molecular machanics correction model for protein structure refinement applied to 
+    the AlphaFold embedding space.
     """
     def __init__(
         self,
         structure_module: nn.Module,
         aux_heads: nn.Module,
         c_z: int = 128,
-        c_s: int = 384,
-        c_hidden: int = 128,
-        num_cycles: int = 3,
-        decay_factors: Optional[List[float]] = None,
-    ):
-        """
-        Args:
-            structure_module: Frozen structure module that maps embeddings to 3D coordinates.
-            aux_heads: Frozen auxiliary heads.
-            c_z: Pair embedding channel dimension.
-            c_s: Single embedding channel dimension.
-            c_hidden: Hidden dimension for the GradientConditioner.
-            num_cycles: Number of refinement cycles.
-            decay_factors: List of decay factors for each cycle (default: [1.0, 0.5, 0.25] for 3 cycles).
-        """
-        super(SimpleMMCRefinementModel, self).__init__()
-        self.c_z = c_z
-        self.c_s = c_s
-        self.num_cycles = num_cycles
-        self.decay_factors = decay_factors
-
-        # Set default decay factors if none are provided.
-        if decay_factors is None and num_cycles == 3:
-            self.decay_factors = [1.0, 0.5, 0.25]
-        elif decay_factors is None and num_cycles == 2:
-            self.decay_factors = [1.0, 0.5]
-        elif decay_factors is None and num_cycles == 1:
-            self.decay_factors = [1.0]
-        else:
-            self.decay_factors = decay_factors
-
-        if len(self.decay_factors) != num_cycles:
-            raise ValueError(f"Need exactly {num_cycles} decay factors, got {len(self.decay_factors)}")
-        
-
-        self.structure_module = structure_module
-        for param in self.structure_module.parameters():
-            param.requires_grad = False
-        
-        self.aux_heads = aux_heads
-        for param in self.aux_heads.parameters():
-            param.requires_grad = False
-        
-        # Create GradientConditioner modules for pair and single embeddings.
-        # We use the gradients as both the input to be modulated and the conditioning signal.
-        self.pair_grad_conditioner = GradientConditioner(c_z, c_hidden)
-        self.single_grad_conditioner = GradientConditioner(c_s, c_hidden)
-        
-        self.single_mlp = nn.Sequential(
-            nn.Linear(c_s, c_hidden),
-            nn.LeakyReLU(),
-            nn.Linear(c_hidden, c_s)
-        )
-
-        self.pair_mlp = nn.Sequential(
-            nn.Linear(c_z, c_hidden),
-            nn.LeakyReLU(),
-            nn.Linear(c_hidden, c_z)
-        )
-
-        self.initialize_weights()
-
-    def initialize_weights(self):
-        """
-        Initialize weights for the GradientConditioner modules.
-        """
-        modules = [self.pair_grad_conditioner, self.single_grad_conditioner]
-        for mod in modules:
-            for layer in mod.modules():
-                if isinstance(layer, nn.Linear):
-                    nn.init.kaiming_normal_(layer.weight, nonlinearity="relu")
-                    if layer.bias is not None:
-                        nn.init.zeros_(layer.bias)
-
-    def forward(
-        self,
-        pair_embed: torch.Tensor,
-        single_embed: torch.Tensor,
-        feats: Dict[str, torch.Tensor],
-        pair_mask: Optional[torch.Tensor] = None,
-        seq_mask: Optional[torch.Tensor] = None,
-        external_grad: Optional[torch.Tensor] = None,
-        temperature: float = 300.0,
-        pH: float = 7.0,
-        inplace_safe: bool = False,
-        output_dir: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """
-        Forward pass for the simple refinement model using GradientConditioner.
-        
-        Args:
-            pair_embed: Initial pair embedding [B, N, N, c_z].
-            single_embed: Initial single embedding [B, N, c_s].
-            feats: Dictionary of input features.
-            pair_mask: Mask for pair embeddings [B, N, N].
-            seq_mask: Mask for sequence [B, N].
-            external_grad: External energy gradient [B, N, 3]
-            temperature: Temperature for Boltzmann acceptance (K).
-            pH: pH for energy calculation.
-            inplace_safe: Flag for in-place operations.
-        
-        Returns:
-            Dictionary containing:
-                'pair': Final pair embedding.
-                'single': Final single embedding.
-                'positions': Final predicted positions.
-                'cycle_positions': List of positions after each cycle.
-                'cycle_pair_deltas': List of pair embedding updates per cycle.
-                'cycle_single_deltas': List of single embedding updates per cycle.
-                'sm': Complete structure module output.
-        """
-        device = pair_embed.device
-        batch_dims = pair_embed.shape[:-3]
-        n_res = pair_embed.shape[-3]
-        
-        # Storage for multi-cycle outputs
-        cycle_positions = []
-        cycle_pair_deltas = []
-        cycle_single_deltas = []
-        cycle_outputs = []
-        
-        # Clone current embeddings
-        curr_pair_embed = pair_embed.clone()
-        curr_single_embed = single_embed.clone()
-        
-         # Create default masks if not provided
-        if seq_mask is None:
-            seq_mask = torch.ones((*batch_dims, n_res), device=single_embed.device)
-        
-        if pair_mask is None:
-            # Create pair mask as outer product of single mask
-            pair_mask = torch.einsum('bi,bj->bij', seq_mask, seq_mask)
-        
-        # Ensure feats has the necessary masks
-        if feats is None:
-            feats = {}
-        
-        if "seq_mask" not in feats:
-            feats["seq_mask"] = seq_mask
-        
-        # Create structure module inputs
-        embeddings = {
-            'pair': curr_pair_embed,
-            'single': curr_single_embed,
-        }
-        
-        # Get gradients with respect to embeddings using backpropagation
-        gradients = backprop_energy_gradient(
-            self.structure_module,
-            embeddings,
-            feats,
-            pH=pH,
-            external_grad=external_grad,
-            output_dir=output_dir
-        )
-
-        pair_grad = gradients['pair'].detach().clone()
-        single_grad = gradients['single'].detach().clone()
-
-        # Free memory from gradients dictionary - safe to delete as we extracted what we need
-        del gradients
-        torch.cuda.empty_cache()
-        
-        # Get initial structure output (positions, energy, etc.)
-        with torch.no_grad():
-            initial_output = self.structure_module(
-                embeddings,
-                feats["aatype"] if "aatype" in feats else None,
-                mask=feats["seq_mask"],
-                inplace_safe=inplace_safe,
-            )
-            prev_positions = initial_output['positions']
-        
-        # Multi-cycle refinement loop
-        for cycle in range(self.num_cycles):
-            # Predict residual updates from the gradients using the GradientConditioner.
-            # Here we use the gradient as both the input and the conditioning signal.
-            pair_delta = self.pair_grad_conditioner(curr_pair_embed, pair_grad)
-            pair_delta = self.pair_mlp(pair_delta)
-            single_delta = self.single_grad_conditioner(curr_single_embed, single_grad)
-            single_delta = self.single_mlp(single_delta)
-            
-            # Store the deltas (detached to break the computational graph)
-            cycle_pair_deltas.append(pair_delta.detach().clone())
-            cycle_single_deltas.append(single_delta.detach().clone())
-            
-            # Scale residuals by the decay factor and update the embeddings.
-            decay_factor = self.decay_factors[cycle]
-            new_pair_embed = curr_pair_embed + decay_factor * pair_delta
-            new_single_embed = curr_single_embed + decay_factor * single_delta
-            
-            # s_inputs_new = {'pair': new_pair_embed, 'single': new_single_embed}
-            # with torch.no_grad():
-            #     output = self.structure_module(
-            #         s_inputs_new,
-            #         feats["aatype"] if "aatype" in feats else None,
-            #         mask=feats["seq_mask"],
-            #         inplace_safe=inplace_safe,
-            #     )
-            #     new_positions = output['positions'].clone()
-            #     cycle_positions.append(new_positions.detach().clone())
-            #     prev_positions = new_positions
-            #     # Update current embeddings and positions.
-            curr_pair_embed = new_pair_embed
-            curr_single_embed = new_single_embed
-            
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-        
-        final_s_inputs = {'pair': curr_pair_embed, 'single': curr_single_embed}
-        final_output = self.structure_module(
-            final_s_inputs,
-            feats["aatype"] if "aatype" in feats else None,
-            mask=feats["seq_mask"],
-            inplace_safe=False,
-        )
-        del final_s_inputs
-        
-        result = {
-            'pair': curr_pair_embed,
-            'single': curr_single_embed,
-            'positions': final_output['positions'],
-            'cycle_positions': cycle_positions,
-            'cycle_pair_deltas': cycle_pair_deltas,
-            'cycle_single_deltas': cycle_single_deltas,
-            'sm': final_output,
-        }
-        
-        del curr_pair_embed, curr_single_embed, prev_positions
-        torch.cuda.empty_cache()
-        
-        # Apply frozen auxiliary heads (assumed to be callable) for additional outputs.
-        aux_heads_output = self.aux_heads(result, mmc=True)
-        for k, v in aux_heads_output.items():
-            result[k] = v
-        del aux_heads_output
-        torch.cuda.empty_cache()
-        
-        return result
-    
-        
-
-class MMCRefinementModel(nn.Module):
-    """
-    Multi-cycle Molecular Mechanics Correction model for protein structure refinement.
-    
-    This model performs iterative refinement of protein embeddings by predicting
-    residual updates conditioned on energy gradients. It uses a multi-cycle approach
-    with decaying update scales to gradually refine the structure.
-    """
-    def __init__(
-        self,
-        structure_module: nn.Module,
-        aux_heads: nn.Module,
-        c_z: int = 128,
-        # c_s: int = 384,
         c_hidden_mul: int = 128,
         c_hidden_att: int = 32,
         no_heads_pair: int = 4,
-        # no_heads_single: int = 4,
         transition_n: int = 4,
         dropout_rate: float = 0.1,
         num_cycles: int = 3,
@@ -774,14 +514,6 @@ class MMCRefinementModel(nn.Module):
         
         # Initialize pair transition with final layer zero-initialized
         self._initialize_pair_transition(self.pair_refinement_module.pair_transition)
-        
-        # Initialize single refinement module
-        # Initialize gradient conditioner
-        # if hasattr(self.single_refinement_module, 'gradient_conditioner'):
-        #     self._initialize_gradient_conditioner(self.single_refinement_module.gradient_conditioner)
-        
-        # Initialize MLP layers
-        # self._initialize_mlp(self.single_refinement_module.mlp)
 
     def _initialize_gradient_conditioner(self, module):
         """Initialize gradient conditioner module"""
@@ -916,6 +648,8 @@ class MMCRefinementModel(nn.Module):
         pH: float = 7.0,
         inplace_safe: bool = False,
         output_dir: Optional[str] = None,
+        return_final_positions: bool = False,
+        return_auxiliary_heads: bool = False,
     ) -> Dict[str, Any]:
         """
         Forward pass for MMC refinement model.
@@ -946,17 +680,9 @@ class MMCRefinementModel(nn.Module):
         batch_dims = pair_embed.shape[:-3]
         n_res = pair_embed.shape[-3]
         
-        # Initialize outputs
-        cycle_positions = []
-        cycle_pair_deltas = []
-        # cycle_single_deltas = []
-        cycle_outputs = []
-        
         # Initialize current embeddings
         curr_pair_embed = pair_embed.clone()
         curr_single_embed = single_embed
-
-        # print(f"Using chunk size: {chunk_size}")
         
         # Create default masks if not provided
         if seq_mask is None:
@@ -1013,107 +739,55 @@ class MMCRefinementModel(nn.Module):
                 inplace_safe=inplace_safe,
             )
             prev_positions = initial_output['positions']
-            
             # We don't delete embeddings here as they might be needed for the backward pass
-        
-        # Multi-cycle refinement
-        for cycle in range(self.num_cycles):
-            # Get current refinement modules
-            pair_refiner = self.pair_refinement_module
-            # single_refiner = self.single_refinement_module
-            
-            # Predict residual updates
-            pair_delta = pair_refiner(
-                pair_embed=curr_pair_embed, 
-                pair_grad=pair_grad, 
-                mask=pair_mask, 
-                chunk_size=chunk_size, 
-                inplace_safe=inplace_safe
-            )
-            # single_delta = single_refiner(
-            #     single_embed=curr_single_embed, 
-            #     single_grad=single_grad, 
-            #     mask=seq_mask
-            # )
-            
-            # Store deltas for analysis - use detached clones to avoid keeping computation graph
-            cycle_pair_deltas.append(pair_delta.detach().clone())
-            # cycle_single_deltas.append(single_delta.detach().clone())
-            
-            # Apply scaled residual updates
-            decay_factor = self.decay_factors[cycle]
-            new_pair_embed = curr_pair_embed + decay_factor * pair_delta
-            # new_single_embed = curr_single_embed + decay_factor * single_delta
-            
-            # Create structure module inputs for the new embeddings
-            s_inputs_new = {
+
+        # Predict residual update
+        pair_refiner = self.pair_refinement_module
+        pair_delta = pair_refiner(
+            pair_embed=curr_pair_embed, 
+            pair_grad=pair_grad, 
+            mask=pair_mask, 
+            chunk_size=chunk_size, 
+            inplace_safe=inplace_safe
+        )
+        new_pair_embed = curr_pair_embed + pair_delta
+        curr_pair_embed = new_pair_embed
+    
+        # Final forward pass through structure module
+        final_output = None
+        if return_final_positions:
+            final_s_inputs = {
                 'pair': new_pair_embed,
                 'single': curr_single_embed,
             }
+            with torch.no_grad():
+                final_output = self.structure_module(
+                    final_s_inputs,
+                    feats["aatype"] if "aatype" in feats else None,
+                    mask=feats["seq_mask"],
+                    inplace_safe=False,
+                )
             
-            # P6 PM: removed structure module call for intermediate positions... only really need it for the end?
-            # Forward through structure module to get positions
-            # with torch.no_grad():
-            #     output = self.structure_module(
-            #         s_inputs_new,
-            #         feats["aatype"] if "aatype" in feats else None,
-            #         mask=feats["seq_mask"],
-            #         inplace_safe=inplace_safe,
-            #     )
-            #     new_positions = output['positions'].clone()  # Clone to ensure we have our own copy
-                
-            # # Store positions for this cycle - use detached clone to avoid keeping computation graph
-            # cycle_positions.append(new_positions.detach().clone())
-                
-            # Update current embeddings with new ones - don't delete the old ones yet
-            # as they might be needed for the backward pass
-            curr_pair_embed = new_pair_embed
-            # curr_single_embed = new_single_embed
-                
-            # Update positions
-            # prev_positions = new_positions
-        
-        # Force CUDA to synchronize and release memory after each cycle
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-    
-        # Final forward pass through structure module
-        final_s_inputs = {
-            'pair': curr_pair_embed,
-            'single': curr_single_embed,
-        }
-            
-        final_output = self.structure_module(
-            final_s_inputs,
-            feats["aatype"] if "aatype" in feats else None,
-            mask=feats["seq_mask"],
-            inplace_safe=False,
-        )
-            
-        # Free memory from final_s_inputs - safe to delete as we have final_output
-        del final_s_inputs
-
         result = {
             'pair': curr_pair_embed,
             'single': curr_single_embed,
             'positions': final_output['positions'],
-            'cycle_positions': cycle_positions,
-            'cycle_pair_deltas': cycle_pair_deltas,
-            # 'cycle_single_deltas': cycle_single_deltas,
             'sm': final_output,
         }
 
         # These are now stored in result, so safe to delete the original references
         del curr_pair_embed, curr_single_embed, prev_positions
-        torch.cuda.empty_cache()  # Force CUDA to release memory
+
+        if not return_auxiliary_heads:
+            return result
 
         # Apply auxiliary heads
-        aux_heads_output = self.aux_heads(result, mmc=True)
-        for k, v in aux_heads_output.items():            result[k] = v
+        aux_heads_output = self.aux_heads(result, sro=True)
+        for k, v in aux_heads_output.items():
+            result[k] = v
         
         # Free memory from aux_heads_output - safe to delete as we copied items to result
         del aux_heads_output
-        # garbage collect
         torch.cuda.empty_cache()
 
         return result

@@ -3,6 +3,7 @@ import tempfile
 import random
 import numpy as np
 import torch
+import json
 from typing import Dict, List, Optional, Tuple, Union, Any
 
 from openfold.np import protein, residue_constants
@@ -78,43 +79,30 @@ def convert_forces_to_a14(forces: torch.Tensor, pdb_str: str) -> torch.Tensor:
     
     return forces_a14
 
-def load_md_prediction_model(model_path: str, device: Optional[str] = None) -> torch.nn.Module:
+
+def load_sro_model(model_param_dict: str, structure_module: torch.nn.Module, aux_heads: torch.nn.Module, model_path: str = None, device: Optional[str] = None) -> torch.nn.Module:
     """
-    Load a trained MD prediction model from a checkpoint file.
-    
-    Args:
-        model_path: Path to the model checkpoint
-        device: Device to load the model on ('cpu', 'cuda', or None for auto-detection)
-        
-    Returns:
-        Loaded model
+    Load SRO model.
     """
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
-    
-    # Load the checkpoint
-    checkpoint = torch.load(model_path, map_location=device)
-    
-    # Extract model configuration and state dict
-    if "model_state_dict" in checkpoint:
-        model_state_dict = checkpoint["model_state_dict"]
-        config = checkpoint.get("config", {})
-    else:
-        # Assume the checkpoint is just the state dict
-        model_state_dict = checkpoint
-        config = {}
-    
-    # Import here to avoid circular imports
-    from openfold.model.mmc.model import MMCModel
-    
-    # Create model instance
-    model = MMCModel(**config)
-    
-    # Load state dict
-    model.load_state_dict(model_state_dict)
+
+    # Load param dictionary from JSON
+    with open(model_param_dict, 'r') as f:
+        model_param_dict = json.load(f)
+
+    model = SubspaceRelaxationOperator(
+            structure_module=structure_module,
+            aux_heads=aux_heads,
+            **model_param_dict
+        )
+
+    # Load model weights
+    if model_path is not None:
+        model.load_state_dict(torch.load(model_path))
+
     model.to(device)
     model.eval()
-    
     return model
 
 def get_model_basename(model_path):

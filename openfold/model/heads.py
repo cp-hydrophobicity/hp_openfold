@@ -54,7 +54,7 @@ class AuxiliaryHeads(nn.Module):
 
         self.config = config
 
-    def forward(self, outputs, mmc=False):
+    def forward(self, outputs, sro=False):
         aux_out = {}
         lddt_logits = self.plddt(outputs["sm"]["single"])
         aux_out["lddt_logits"] = lddt_logits
@@ -65,7 +65,7 @@ class AuxiliaryHeads(nn.Module):
         distogram_logits = self.distogram(outputs["pair"])
         aux_out["distogram_logits"] = distogram_logits
 
-        if not mmc:
+        if not sro:
             masked_msa_logits = self.masked_msa(outputs["msa"])
             aux_out["masked_msa_logits"] = masked_msa_logits
 
@@ -76,7 +76,7 @@ class AuxiliaryHeads(nn.Module):
             "experimentally_resolved_logits"
         ] = experimentally_resolved_logits
 
-        if not mmc and self.config.tm.enabled:
+        if not sro and self.config.tm.enabled:
             tm_logits = self.tm(outputs["pair"])
             aux_out["tm_logits"] = tm_logits
             aux_out["ptm_score"] = compute_tm(

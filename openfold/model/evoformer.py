@@ -43,9 +43,7 @@ from openfold.model.triangular_multiplicative_update import (
 from openfold.utils.checkpointing import checkpoint_blocks, get_checkpoint_fn
 from openfold.utils.chunk_utils import chunk_layer, ChunkSizeTuner
 from openfold.utils.tensor_utils import add
-
 from openfold.utils.feats import atom14_to_atom37
-
 from openfold.utils.custom_logging import WandBLogger
 
 from sklearn.decomposition import PCA
@@ -606,35 +604,6 @@ class EvoformerBlock(MSABlock):
         else:
             m = input_tensors[0]
 
-        if self.save_pca_embeddings > 0:
-            z_save = z.clone().cpu()
-            pair_embed_dim = z_save.shape[-1]
-            pair_pc_input = z_save.view(-1, pair_embed_dim)
-            pair_pc = PCA(n_components=self.save_pca_embeddings).fit(pair_pc_input)
-            # Save top K principal components and explained variance ratio
-            logger.save_array_to_npz(pair_pc.components_, f"pair_pc_{step_no}", subdir_name="pca")
-            logger.save_array_to_npz(pair_pc.explained_variance_ratio_, f"pair_pc_explained_ratio_{step_no}", subdir_name="pca")
-            # Perform Same for top 2 Principle Components
-            pair_pc_input = z_save.view(-1, pair_embed_dim)
-            pair_pc = PCA(n_components=2).fit(pair_pc_input)
-            # Reduce to 2 dimensions for visualization
-            pair_pc_reduced = pair_pc.fit_transform(pair_pc_input)
-            logger.save_array_to_npz(pair_pc_reduced, f"pair_pc_two_dim_{step_no}", subdir_name="pca")
-
-            s = self.compute_s(m[..., 0, :, :])
-            s_save = s.clone().cpu()
-            single_pc = PCA(n_components=self.save_pca_embeddings).fit(s_save)
-            # Save top K principal components and explained variance ratio
-            logger.save_array_to_npz(single_pc.components_, f"single_pc_{step_no}", subdir_name="pca")
-            logger.save_array_to_npz(single_pc.explained_variance_ratio_, f"single_pc_explained_ratio_{step_no}", subdir_name="pca")
-            # Perform Same for top 2 Principle Components
-            single_pc = PCA(n_components=2).fit(s_save)
-            # Reduce to 2 dimensions for visualization
-            single_pc_reduced = single_pc.transform(s_save)
-            logger.save_array_to_npz(single_pc_reduced, f"single_pc_two_dim_{step_no}", subdir_name="pca")
-
-            del z_save, s_save
-
         if self.generate_intermediate_structures:
             s_inputs = {}
             n_seq = feats["msa_feat"].shape[-3]
@@ -657,13 +626,10 @@ class EvoformerBlock(MSABlock):
 
         return m, z
 
-class EvoformerBlockMMCWrapper(EvoformerBlock):
-    def __init__(self, mmc_mode=False, mmc_temp=300.0, mmc_pH=7.0, *args, **kwargs):
+class EvoformerBlockSROWrapper(EvoformerBlock):
+    def __init__(self, sro_mode=False, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.mmc_mode = mmc_mode
-        self.structure_module = None  # Will be set via set_structure_module
-        self.mmc_temp = mmc_temp
-        self.mmc_pH = mmc_pH
+        self.sro_mode = sro_mode
 
     def prepare_structure_inputs(self, m, z, **kwargs):
         """
@@ -717,41 +683,62 @@ class EvoformerBlockMMCWrapper(EvoformerBlock):
         
         return atom14_to_atom37(sm["positions"][-1], feats)
 
-    def k_prime(self, embeddings, atom_pos_prev, atom_pos_curr):
-        pass
+    def initialize_sro(self, sro_model, sro_temp=300.0, sro_pH=7.0, sro_step_eval=False):
+        """
+        Initialize the SRO model for the EvoformerBlock.
+        """
+        self.sro_model = sro_model
+        self.sro_temp = sro_temp
+        self.sro_pH = sro_pH
+        self.sro_step_eval = sro_step_eval
 
     def forward(self, m, z, **kwargs):
-        if not self.mmc_mode:
+        if not self.sro_mode:
             return super().forward(m, z, **kwargs)
         
-        # Store previous state
-        m_prev = m.clone()
-        z_prev = z.clone()
-
         # Run standard forward pass
         m, z = super().forward(m, z, **kwargs)
 
         # Prepare structure inputs for both previous and current states
         s_inputs_prev = self.prepare_structure_inputs(m_prev, z_prev, **kwargs)
-        s_inputs_curr = self.prepare_structure_inputs(m, z, **kwargs)
-        
-        # Get feats from kwargs
-        feats = kwargs.get("feats")
 
-        # Evaluate step using MMC criteria with proper inputs
-        if get_evaluate_step()(
-            s_inputs_prev=s_inputs_prev,
-            s_inputs_curr=s_inputs_curr,
-            structure_module=self.structure_module,
-            feats=feats,
-            temp=self.mmc_temp,
-            pH=self.mmc_pH
-        ):
-            return m, z  # Accept the step
+        sro_result = self.sro_model(
+            s_inputs_prev,
+            feats["aatype"],
+            mask=feats["seq_mask"].to(dtype=s_inputs_prev["single"].dtype),
+            inplace_safe=False,
+            temperature=self.sro_temp,
+            pH=self.sro_pH,
+        )
+        z_new = sro_result["pair"]
+        s_inputs_new = self.prepare_structure_inputs(m, z_new, **kwargs)
+            
+        if self.sro_step_eval:
+            # TODO: Compare energies of both, if energy calculation invalid for both
+            # keep the SRO modification
+            prot = protein.Protein(
+                atom_positions=final_atom_pos,
+                aatype=sequence, 
+                atom_mask=atom_mask,
+                residue_index=residue_index,
+                b_factors=np.zeros_like(atom_mask)
+            )
+            
+            energy_result = calculate_energy(
+                prot=prot,
+                output_dir=tmp_dir,
+                use_gpu=torch.cuda.is_available(),
+                add_solvent=True,
+                pH=float(pH),
+                detailed=False,
+                get_forces=False
+            )
+        else:
+            z_return = z_new
+
+        return m, z_return
+
         
-        # Reject the step and apply k' update
-        m, z = k_prime(m, int_atom_pos_prev, int_atom_pos)
-        return m, z
 
 
 class ExtraMSABlock(MSABlock):
@@ -977,10 +964,8 @@ class EvoformerStack(nn.Module):
         eps: float,
         clear_cache_between_blocks: bool = False, 
         tune_chunk_size: bool = False,
-        mmc_blocks: int = 0,
-        mmc_temp: float = 300.0,
-        mmc_pH: float = 7.0,
         save_pca_embeddings: int = 0,
+        sro_blocks: int = 0,
         **kwargs,
     ):
         """
@@ -1038,17 +1023,17 @@ class EvoformerStack(nn.Module):
         self.blocks = nn.ModuleList()
         
         # MMC configuration - number of blocks from end to apply MMC
-        self.mmc_blocks = mmc_blocks
+        self.sro_blocks = sro_blocks
         
-        if self.mmc_blocks > no_blocks:
-            raise ValueError(f"mmc_blocks ({self.mmc_blocks}) cannot be greater than total number of blocks ({no_blocks})")
+        if self.sro_blocks > no_blocks:
+            raise ValueError(f"sro_blocks ({self.sro_blocks}) cannot be greater than total number of blocks ({no_blocks})")
 
         for i in range(no_blocks):
-            # Enable MMC for the last mmc_blocks blocks
-            use_mmc = (i >= (no_blocks - self.mmc_blocks)) if self.mmc_blocks > 0 else False
+            # Enable MMC for the last sro_blocks blocks
+            use_sro = (i >= (no_blocks - self.sro_blocks)) if self.sro_blocks > 0 else False
             
-            block = EvoformerBlockMMCWrapper(
-                mmc_mode=use_mmc,
+            block = EvoformerBlockSROWrapper(
+                sro_mode=use_sro,
                 c_m=c_m,
                 c_z=c_z,
                 c_hidden_msa_att=c_hidden_msa_att,
@@ -1066,8 +1051,6 @@ class EvoformerStack(nn.Module):
                 inf=inf,
                 eps=eps,
                 no_blocks=no_blocks,
-                mmc_temp=mmc_temp,
-                mmc_pH=mmc_pH,
                 save_pca_embeddings=save_pca_embeddings,
             )
             self.blocks.append(block)
@@ -1082,6 +1065,10 @@ class EvoformerStack(nn.Module):
     def set_structure_module(self, structure_module, generate_intermediates=False):
         for block in self.blocks:
             block.set_structure_module(structure_module=structure_module, compute_s=self.linear, generate_intermediates=generate_intermediates)
+
+    def initialize_sro(self, sro_model, sro_temp=300.0, sro_pH=7.0, sro_step_eval=False):
+        for block in self.blocks:
+            block.initialize_sro(sro_model=sro_model, sro_temp=sro_temp, sro_pH=sro_pH, sro_step_eval=sro_step_eval)
 
     def _prep_blocks(self, 
         m: torch.Tensor, 

@@ -2,7 +2,7 @@
 # Copyright 2023 OpenFold team
 
 """
-Simplified loss functions for MMC refinement model training.
+Simplified loss functions for SRO model training.
 """
 
 import torch
@@ -13,7 +13,7 @@ from typing import Dict, Optional, Tuple
 from openfold.utils.rigid_utils import Rotation, Rigid
 from openfold.utils.tensor_utils import masked_mean
 from openfold.utils.loss import AlphaFoldLoss
-from openfold.model.mmc.metrics import calculate_ca_rmsd
+from openfold.model.sro.metrics import calculate_ca_rmsd
 
 from openfold.utils.loss import (
     distogram_loss,
@@ -27,55 +27,8 @@ from openfold.utils.loss import (
     find_structural_violations
 )
 
-# Introduces pLDDT loss, removes distogram
-p4_config = ml_collections.ConfigDict({
-    'fape': {
-        'weight': 0.6,  # Overall FAPE weight from config.py L702
-        'backbone': {
-            'weight': 0.4,
-            'clamp_distance': 10.0,
-            'loss_unit_distance': 10.0,
-        },
-        'sidechain': {
-            'weight': 0.2,
-            'clamp_distance': 10.0,
-            'length_scale': 10.0,
-        },
-        'eps': 1e-4,
-    },
-    'violation': {
-        'weight': 1.0,  # From config.py L728 - initially disabled
-        'violation_tolerance_factor': 12.0,
-        'clash_overlap_tolerance': 1.5,
-        'average_clashes': False,
-        'eps': 1e-6,
-    },
-    'plddt_loss': { 
-        'weight': 0.05,
-        'cutoff': 15.0,
-        'min_resolution': 0.1,
-        'max_resolution': 3.0,
-        'no_bins': 50,
-        'eps': 1e-10,
-    },
-    'distogram': {
-        'weight': 0.0,
-        'min_bin': 2.3125,
-        'max_bin': 21.6875,
-        'no_bins': 64,
-        'eps': 1e-6,
-    },
-    'supervised_chi': {  # Added from config.py L717
-        'weight': 1.0,
-        'chi_weight': 0.5, 
-        'angle_norm_weight': 0.01,
-        'eps': 1e-6,
-    },
-    'eps': 1e-8,
-})
-
 # Introduces pLDDT loss, has distogram
-p6_config = ml_collections.ConfigDict({
+loss_config = ml_collections.ConfigDict({
     'fape': {
         'weight': 1.0,  # Overall FAPE weight from config.py L702
         'backbone': {
@@ -122,67 +75,6 @@ p6_config = ml_collections.ConfigDict({
         'weight': 0.02,
         'eps': 1e-6,
     },
-    'eps': 1e-8,
-})
-
-# Original config
-original_config = ml_collections.ConfigDict({
-    'fape': {
-        'weight': 1.0,  # Overall FAPE weight from config.py L702
-        'backbone': {
-            'weight': 0.5,
-            'clamp_distance': 10.0,
-            'loss_unit_distance': 10.0,
-        },
-        'sidechain': {
-            'weight': 0.5,
-            'clamp_distance': 10.0,
-            'length_scale': 10.0,
-        },
-        'eps': 1e-4,
-    },
-    'violation': {
-        'weight': 1.0,  # From config.py L728 - initially disabled
-        'violation_tolerance_factor': 12.0,
-        'clash_overlap_tolerance': 1.5,
-        'average_clashes': False,
-        'eps': 1e-6,
-    },
-    'plddt_loss': { 
-        'weight': 0.0,
-        'cutoff': 15.0,
-        'min_resolution': 0.1,
-        'max_resolution': 3.0,
-        'no_bins': 50,
-        'eps': 1e-10,
-    },
-    'distogram': {
-        'weight': 0.3,
-        'min_bin': 2.3125,
-        'max_bin': 21.6875,
-        'no_bins': 64,
-        'eps': 1e-6,
-    },
-    'supervised_chi': {  # Added from config.py L717
-        'weight': 1.0,
-        'chi_weight': 0.5, 
-        'angle_norm_weight': 0.01,
-        'eps': 1e-6,
-    },
-    'rmsd': {  # Added from config.py L717
-        'weight': 0.02,
-        'eps': 1e-6,
-    },
-    # 'tm': {
-    #     'enabled': False,
-    #     'weight': 0,
-    #     'eps': 1e-8,
-    # },
-    # 'chain_center_of_mass': {
-    #     'enabled': False,
-    #     'weight': 0.1,
-    #     'eps': 1e-8,
-    # },
     'eps': 1e-8,
 })
 
@@ -194,7 +86,7 @@ class RefinementLoss(AlphaFoldLoss):
 
     def __init__(self, config: Optional[ml_collections.ConfigDict] = None, loss_weights: Optional[Dict[str, float]] = None):
         if config is None:
-            config = p6_config
+            config = loss_config
         
         # Apply custom loss weights if provided
         if loss_weights is not None:

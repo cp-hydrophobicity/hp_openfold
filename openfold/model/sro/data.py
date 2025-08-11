@@ -17,7 +17,7 @@ from typing import Dict, List, Optional, Tuple, Union
 from collections import defaultdict
 
 from openfold.np import protein, residue_constants
-from openfold.model.mmc.core import convert_forces_to_a14
+from openfold.model.sro.core import convert_forces_to_a14
 from openfold.data.data_transforms import make_atom14_masks, make_atom14_positions
 
 logger = logging.getLogger(__name__)
