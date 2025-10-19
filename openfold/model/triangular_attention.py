@@ -96,7 +96,7 @@ class TriangleAttention(nn.Module):
         use_deepspeed_evo_attention: bool = False,
         use_lma: bool = False,
         inplace_safe: bool = False,
-        logger: WandBLogger = None,
+        wb_logger: WandBLogger = None,
     ) -> torch.Tensor:
         """
         Args:
@@ -147,7 +147,6 @@ class TriangleAttention(nn.Module):
                 use_memory_efficient_kernel=use_memory_efficient_kernel,
                 use_deepspeed_evo_attention=use_deepspeed_evo_attention,
                 use_lma=use_lma,
-                # logger=logger,
             )
 
         if(not self.starting):

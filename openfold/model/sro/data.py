@@ -21,6 +21,7 @@ from openfold.model.sro.core import convert_forces_to_a14
 from openfold.data.data_transforms import make_atom14_masks, make_atom14_positions
 
 logger = logging.getLogger(__name__)
+logger.setLevel(level=logging.INFO)
 
 
 def extract_checkpoint_number(filename):
@@ -31,36 +32,15 @@ def extract_checkpoint_number(filename):
     return None
 
 
-def find_ground_truth_dir(protein_dir, pH='5'):
-    """
-    Find the directory containing ground truth PDB files.
-    Looks for directories matching patterns like md_ph_5.0_pdbs.
+def find_ground_truth_dir(protein_dir, folder_name):
     
-    Args:
-        protein_dir: Path to the protein directory
-        pH: pH value to use for ground truth selection
-        
-    Returns:
-        Path to the ground truth directory or None if not found
-    """
-    # List of possible ground truth directory patterns, in order of preference
-    ground_truth_patterns = [
-        f"md_ph_{pH}_pdbs"
-    ]
+    path = os.path.join(protein_dir, folder_name)
+
+    # check if path exists
+    if not os.path.exists(path):
+        return None
     
-    for pattern in ground_truth_patterns:
-        if "*" in pattern:
-            # Use glob for wildcard patterns
-            matches = glob.glob(os.path.join(protein_dir, pattern))
-            if matches:
-                return matches[0]
-        else:
-            # Direct check for exact directory names
-            dir_path = os.path.join(protein_dir, pattern)
-            if os.path.isdir(dir_path):
-                return dir_path
-    
-    return None
+    return path
 
 
 class ProteinRefinementDataset(Dataset):
@@ -88,6 +68,7 @@ class ProteinRefinementDataset(Dataset):
         self,
         predictions_dir: str,
         pH: str = '5.0',
+        gt_dir: str = 'md_ph_5_pdbs',
         filter_proteins: Optional[List[str]] = None,
         max_samples_per_protein: Optional[int] = None,
         max_sequence_length: Optional[int] = None,
@@ -98,6 +79,7 @@ class ProteinRefinementDataset(Dataset):
     ):
         self.predictions_dir = predictions_dir
         self.pH = pH
+        self.gt_dir = gt_dir
         self.filter_proteins = filter_proteins
         self.max_samples_per_protein = max_samples_per_protein
         self.max_sequence_length = max_sequence_length
@@ -147,11 +129,15 @@ class ProteinRefinementDataset(Dataset):
                 continue
             
             # Find the ground truth directory with specified pH
-            ground_truth_dir = find_ground_truth_dir(protein_dir, pH=self.pH)
+            ground_truth_dir = find_ground_truth_dir(protein_dir, folder_name=self.gt_dir)
             if not ground_truth_dir:
                 logger.warning(f"Skipping {protein_name}: Could not find ground truth directory for pH {self.pH}")
                 continue
-            forces_dir = ground_truth_dir.replace("md", "forces")
+
+            forces_dir = os.path.join(os.path.dirname(ground_truth_dir), f"forces_ph_{self.pH}_pdbs")
+            if not os.path.exists(forces_dir):
+                logger.warning(f"Skipping {protein_name}: Could not find forces directory for pH {self.pH}")
+                continue
             
             # Get all PDB files in the pdbs directory
             pdb_files = glob.glob(os.path.join(pdbs_dir, "intermediate_step_*.pdb"))
@@ -799,6 +785,7 @@ def create_data_loaders(
 def build_dataset(
     predictions_dir: str,
     pH: str = '5',
+    gt_dir: str = 'md_ph_5_pdbs',
     output_dir: Optional[str] = None,
     data_dir: Optional[str] = None,
     filter_proteins: Optional[List[str]] = None,
@@ -875,7 +862,8 @@ def build_dataset(
                 # Create datasets with pre-loaded samples
                 train_dataset = ProteinRefinementDataset(
                     predictions_dir=predictions_dir, 
-                    pH=pH, 
+                    pH=pH,
+                    gt_dir=gt_dir, 
                     cache_embeddings=cache_embeddings, 
                     cache_size=cache_size,
                     samples=train_samples
@@ -883,7 +871,8 @@ def build_dataset(
                 
                 val_dataset = ProteinRefinementDataset(
                     predictions_dir=predictions_dir, 
-                    pH=pH, 
+                    pH=pH,
+                    gt_dir=gt_dir,
                     cache_embeddings=cache_embeddings, 
                     cache_size=cache_size,
                     samples=val_samples
@@ -891,7 +880,8 @@ def build_dataset(
                 
                 test_dataset = ProteinRefinementDataset(
                     predictions_dir=predictions_dir, 
-                    pH=pH, 
+                    pH=pH,
+                    gt_dir=gt_dir, 
                     cache_embeddings=cache_embeddings, 
                     cache_size=cache_size,
                     samples=test_samples
@@ -920,6 +910,7 @@ def build_dataset(
     dataset = ProteinRefinementDataset(
         predictions_dir=predictions_dir,
         pH=pH,
+        gt_dir=gt_dir,
         filter_proteins=filter_proteins,
         max_samples_per_protein=max_samples_per_protein,
         max_sequence_length=max_sequence_length,
@@ -971,7 +962,6 @@ def build_dataset(
         cache_size=cache_size,
         samples=train_samples
     )
-    # train_dataset.embedding_cache = dataset.embedding_cache  # Share the cache
     
     val_dataset = ProteinRefinementDataset(
         predictions_dir=predictions_dir, 
@@ -980,7 +970,6 @@ def build_dataset(
         cache_size=cache_size,
         samples=val_samples
     )
-    # val_dataset.embedding_cache = dataset.embedding_cache  # Share the cache
     
     test_dataset = ProteinRefinementDataset(
         predictions_dir=predictions_dir, 
@@ -989,7 +978,6 @@ def build_dataset(
         cache_size=cache_size,
         samples=test_samples
     )
-    # test_dataset.embedding_cache = dataset.embedding_cache  # Share the cache
     
     # Save datasets to disk if output_dir is provided
     if output_dir:
@@ -1005,7 +993,11 @@ def build_dataset(
             "pH": pH,
             "creation_time": os.path.getmtime(predictions_dir),
             "total_proteins": len(set([s["protein_name"] for s in dataset.samples])),
-            "feature_keys": list(dataset[0]["embeddings"].keys()) if len(dataset) > 0 else []
+            "feature_keys": list(dataset[0]["embeddings"].keys()) if len(dataset) > 0 else [],
+            "gt_dir": gt_dir,
+            "filter_proteins": filter_proteins,
+            "max_samples_per_protein": max_samples_per_protein,
+            "max_sequence_length": max_sequence_length,
         }
         
         with open(os.path.join(output_dir, "metadata.pkl"), "wb") as f:
@@ -1037,6 +1029,7 @@ if __name__ == '__main__':
     parser.add_argument("--predictions_dir", type=str, required=True, help="Path to predictions directory")
     parser.add_argument("--output_dir", type=str, help="Path to save processed dataset")
     parser.add_argument("--pH", type=str, default="5.0", help="pH value for ground truth selection")
+    parser.add_argument("--gt_dir", type=str, default="md_ph_5_pdbs", help="Ground truth directory")
     parser.add_argument("--batch_size", type=int, default=1, help="Batch size")
     parser.add_argument("--num_workers", type=int, default=4, help="Number of workers")
     parser.add_argument("--cache_embeddings", action="store_true", help="Cache embeddings in memory")

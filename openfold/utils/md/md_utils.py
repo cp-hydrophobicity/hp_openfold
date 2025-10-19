@@ -16,11 +16,12 @@ from scipy import stats
 from openfold.np import protein
 from openfold.np.relax import amber_minimize
 from openfold.np.relax import utils as relax_utils
-from openfold.utils.md.solvation_utils import GromacsUtils, strip_solvent_from_pdb
+from openfold.utils.md.solvation_utils import solvate, strip_solvent
 from openfold.utils.md.utils import work_dir
-from openfold.utils.md.protonation_utils import ProtonationUtils, remove_all_cleaned
+from openfold.utils.md.protonation_utils import protonate, strip_hydrogens
 
 logger = logging.getLogger(__name__)
+logger.setLevel(level=logging.INFO)
 
 class MolecularDynamics:
     """Class for running MD simulations using the existing AMBER implementation."""
@@ -101,7 +102,7 @@ class MolecularDynamics:
             pH_value = pH if pH is not None else self.pH
             
             # protonate the protein at the specified pH
-            protonated_path, protonation_info = ProtonationUtils.protonate_protein(
+            protonated_path, protonation_info = protonate(
                 pdb_str,
                 output_dir=output_dir,
                 pH=pH_value
@@ -118,7 +119,7 @@ class MolecularDynamics:
         
         if add_solvent:
             # use GROMACS for solvation with the protonated structure
-            solvated_path = GromacsUtils.solvate_with_gromacs(
+            solvated_path = solvate(
                 protonated_path,
                 output_dir=output_dir,
                 solvent=solvent,
@@ -198,9 +199,7 @@ class MolecularDynamics:
         self,
         simulation: openmm_app.Simulation,
         pdb: openmm_app.PDBFile,
-        detailed: bool = False,
         get_forces: bool = False,
-        per_residue_forces: bool = False,
     ) -> Dict[str, Any]:
         """Calculate energy and optionally forces for a protein structure.
         
@@ -235,11 +234,6 @@ class MolecularDynamics:
             'total_energy': (state.getKineticEnergy() + state.getPotentialEnergy()).value_in_unit(unit.kilojoule_per_mole)
         }
         
-        # add detailed energy breakdown if requested
-        if detailed:
-            force_energies = self._decompose_energy_by_force(simulation)
-            energies.update(force_energies)
-        
         # if only energy was requested, return it directly
         if not get_forces:
             return energies
@@ -255,90 +249,7 @@ class MolecularDynamics:
         result['positions'] = positions
         result['total_force_magnitude'] = np.linalg.norm(forces, axis=1).sum()
         
-        # calculate per-residue forces if requested
-        if per_residue_forces:
-            result['residue_forces'] = self._calculate_residue_forces(pdb, forces, positions)
-        
         return result
-    
-    def _decompose_energy_by_force(self, simulation: openmm_app.Simulation) -> Dict[str, float]:
-        """Decompose the energy of a system by force type.
-        
-        Args:
-            simulation: OpenMM simulation object
-            
-        Returns:
-            Dictionary of energy components by force type (in kJ/mol)
-        """
-        system = simulation.system
-        context = simulation.context
-        
-        # initialize energy components dictionary
-        energy_components = {}
-        
-        # get energy for each force
-        for i in range(system.getNumForces()):
-            force = system.getForce(i)
-            force_name = force.__class__.__name__
-            
-            # get energy for this force
-            force.setForceGroup(i)
-            energy = context.getState(getEnergy=True, groups={i}).getPotentialEnergy()
-            energy_components[force_name] = energy.value_in_unit(unit.kilojoule_per_mole)
-        
-        return energy_components
-    
-    def _calculate_residue_forces(
-        self,
-        pdb: openmm_app.PDBFile,
-        forces: np.ndarray,
-        positions: Optional[np.ndarray] = None
-    ) -> List[Dict[str, Any]]:
-        """Calculate forces on each residue by summing atom forces.
-        
-        Args:
-            pdb: PDB file object with topology information
-            forces: Array of forces on each atom
-            positions: Optional array of atom positions
-            
-        Returns:
-            List of dictionaries with residue force information, sorted by magnitude
-        """
-        residue_forces = {}
-        residue_positions = {} if positions is not None else None
-        
-        # group atoms by residue
-        for i, atom in enumerate(pdb.topology.atoms()):
-            residue = atom.residue
-            residue_id = f"{residue.chain.id}:{residue.name}:{residue.id}"
-            
-            if residue_id not in residue_forces:
-                residue_forces[residue_id] = np.zeros(3)
-                if positions is not None:
-                    residue_positions[residue_id] = []
-            
-            residue_forces[residue_id] += forces[i]
-            if positions is not None:
-                residue_positions[residue_id].append(positions[i])
-        
-        # calculate magnitudes and center positions
-        residue_data = []
-        for residue_id, force in residue_forces.items():
-            residue_info = {
-                'residue_id': residue_id,
-                'force': force.tolist(),
-                'magnitude': np.linalg.norm(force),
-            }
-            
-            if positions is not None:
-                center = np.mean(residue_positions[residue_id], axis=0)
-                residue_info['center'] = center.tolist()
-            
-            residue_data.append(residue_info)
-        
-        # sort by magnitude (highest first)
-        residue_data.sort(key=lambda x: x['magnitude'], reverse=True)
-        return residue_data
     
     def run_dynamics(
         self,
@@ -474,8 +385,6 @@ def run_md(
     box_buffer: float = 0.5,
     timestep: float = 0.002,
     pH: Optional[float] = 7.0,
-    analyze_water: bool = False,
-    water_voxel_size: float = 1.0,
     save_trajectory: bool = True,
     save_individual_frames: bool = True,
     save_final_structure: bool = True,
@@ -501,8 +410,6 @@ def run_md(
             titratable residues (such as histidine, aspartic acid, glutamic acid, lysine, etc.) in the protein,
             which can significantly impact protein structure, stability, and function. If set to None, protonation
             will be skipped entirely.
-        analyze_water: Whether to analyze water density fluctuations
-        water_voxel_size: Size of voxels for water density analysis in Angstroms
         save_trajectory: Whether to save the full trajectory as a PDB file
         save_individual_frames: Whether to save individual PDB files for each frame
         save_final_structure: Whether to save the final structure as a PDB file
@@ -570,48 +477,6 @@ def run_md(
         debug_info['energy'] = energy_result.get('energies', {})
         logger.info(f"Energy: {debug_info['energy']}")
     
-    if analyze_water and add_solvent:
-        logger.info("Analyzing water density fluctuations...")
-        try:
-            from openfold.utils.md.water_analysis import extract_trajectory_frames, analyze_water_density_fluctuations
-            
-            # extract trajectory frames
-            frames = extract_trajectory_frames(stats.get("output_pdb", ""))
-            
-            water_density_results = analyze_water_density_fluctuations(
-                trajectory_frames=frames,
-                voxel_size=water_voxel_size,
-            )
-            
-            water_density_dir = os.path.join(output_dir, "water_density")
-            os.makedirs(water_density_dir, exist_ok=True)
-            
-            np.save(os.path.join(water_density_dir, "density_mean.npy"), water_density_results['density_mean'])
-            np.save(os.path.join(water_density_dir, "density_std.npy"), water_density_results['density_std'])
-            np.save(os.path.join(water_density_dir, "density_cv.npy"), water_density_results['density_cv'])
-            np.save(os.path.join(water_density_dir, "density_entropy.npy"), water_density_results['density_entropy'])
-            
-            x_centers, y_centers, z_centers = water_density_results['grid_coords']
-            np.save(os.path.join(water_density_dir, "grid_x.npy"), x_centers)
-            np.save(os.path.join(water_density_dir, "grid_y.npy"), y_centers)
-            np.save(os.path.join(water_density_dir, "grid_z.npy"), z_centers)
-            
-            # save metadata
-            with open(os.path.join(water_density_dir, "metadata.txt"), 'w') as f:
-                f.write(f"Voxel size: {water_voxel_size} Angstroms\n")
-                f.write(f"Number of frames: {water_density_results['n_frames']}\n")
-                f.write(f"Voxel volume: {water_density_results['voxel_volume']} cubic Angstroms\n")
-            
-            logger.info(f"Water density analysis complete. Results saved to {water_density_dir}")
-            
-            debug_info['water_density_analyzed'] = True
-            debug_info['water_density_dir'] = water_density_dir
-            
-        except Exception as e:
-            logger.error(f"Error during water density analysis: {e}")
-            debug_info['water_density_analyzed'] = False
-            debug_info['water_density_error'] = str(e)
-    
     pdb_str = amber_minimize.clean_protein(prot)
 
     original_atom_count = sum(1 for line in pdb_str.splitlines() if line.startswith('ATOM'))
@@ -635,7 +500,7 @@ def run_md(
             openmm_app.PDBFile.writeFile(topology, final_pos, f)
             temp_pdb = f.getvalue()
         
-        final_pdb = strip_solvent_from_pdb(temp_pdb)
+        final_pdb = strip_solvent(temp_pdb)
     else:
         final_pdb = relax_utils.overwrite_pdb_coordinates(pdb_str, protein_pos)
         final_pdb = relax_utils.overwrite_b_factors(final_pdb, prot.b_factors)
@@ -643,7 +508,7 @@ def run_md(
     final_atom_count = sum(1 for line in final_pdb.splitlines() if line.startswith('ATOM'))
     logger.info(f"Number of atoms in final protein: {final_atom_count}")
 
-    final_pdb_no_h, non_h_indices = remove_all_cleaned(final_pdb)
+    final_pdb_no_h, non_h_indices = strip_hydrogens(final_pdb)
 
     # update final positions to only include non-hydrogen atoms if we have indices
     if len(non_h_indices) > 0:

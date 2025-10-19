@@ -210,7 +210,7 @@ class AlphaFold(nn.Module):
         diff = torch.sqrt(sq_diff + eps).item()
         return diff <= self.config.recycle_early_stop_tolerance
 
-    def iteration(self, feats, prevs, cycle_no, logger=None, _recycle=True):
+    def iteration(self, feats, prevs, cycle_no, wb_logger=None, _recycle=True):
         # Primary output dictionary
         outputs = {}
         
@@ -420,7 +420,7 @@ class AlphaFold(nn.Module):
                 use_deepspeed_evo_attention=self.globals.use_deepspeed_evo_attention,
                 use_lma=self.globals.use_lma,
                 _mask_trans=self.config._mask_trans,
-                logger=logger,
+                wb_logger=wb_logger,
                 cycle_no=cycle_no,
             )
 
@@ -438,7 +438,7 @@ class AlphaFold(nn.Module):
                 use_flash=self.globals.use_flash,
                 inplace_safe=inplace_safe,
                 _mask_trans=self.config._mask_trans,
-                logger=logger,
+                wb_logger=wb_logger,
                 cycle_no=cycle_no,
             )
 
@@ -500,7 +500,7 @@ class AlphaFold(nn.Module):
         for b in self.extra_msa_stack.blocks:
             b.ckpt = self.config.extra_msa.extra_msa_stack.ckpt
 
-    def forward(self, batch, logger: WandBLogger = None):
+    def forward(self, batch, wb_logger: WandBLogger = None):
         """
         Args:
             batch:
@@ -579,15 +579,15 @@ class AlphaFold(nn.Module):
                     feats,
                     prevs,
                     cycle_no,
-                    logger,
+                    wb_logger,
                     _recycle=(num_iters > 1),
                 )
 
                 num_recycles += 1
 
                 log_out = self.aux_heads(outputs)
-                logger.log_metric(value=torch.mean(log_out["plddt"]), name="mean_plddt", step=cycle_no)
-                logger.save_tensor_to_npz(tensor=log_out["plddt"], data_name=f"plddt-cycle_{cycle_no}", subdir_name="plddt")
+                wb_logger.log_metric(value=torch.mean(log_out["plddt"]), name="mean_plddt", step=cycle_no)
+                wb_logger.save_tensor_to_npz(tensor=log_out["plddt"], data_name=f"plddt-cycle_{cycle_no}", subdir_name="plddt")
                 # logger.save_tensor_to_npz(tensor=outputs["final_atom_positions"], data_name=f"final-atom-positions-cycle_{cycle_no}", subdir_name="final_atom_positions")
                 # logger.save_tensor_to_npz(tensor=outputs["pair"], data_name=f"pair-cycle_{cycle_no}", subdir_name="pair_embed")
                 # logger.save_tensor_to_npz(tensor=outputs["single"], data_name=f"single-cycle_{cycle_no}", subdir_name="single_embed")

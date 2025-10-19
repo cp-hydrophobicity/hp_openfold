@@ -5,6 +5,7 @@ from typing import Tuple, List, Dict
 from openfold.np import residue_constants as rc
 
 logger = logging.getLogger(__name__)
+logger.setLevel(level=logging.INFO)
 
 
 def compute_rmsd(

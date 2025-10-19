@@ -69,7 +69,8 @@ def model_config(
     sro_blocks=0,
     sro_temp=300,
     sro_pH=7.0,
-    sro_step_eval=False,
+    sro_energy_eval=False,
+    sro_compare_energy=False,
 ):
     c = copy.deepcopy(config)
     # TRAINING PRESETS
@@ -254,7 +255,8 @@ def model_config(
 
     c.model.evoformer_stack.sro_temp = sro_temp
     c.model.evoformer_stack.sro_pH = sro_pH
-    c.model.evoformer_stack.sro_step_eval = sro_step_eval
+    c.model.evoformer_stack.sro_energy_eval = sro_energy_eval
+    c.model.evoformer_stack.sro_compare_energy = sro_compare_energy
 
     if use_deepspeed_evoformer_attention:
         c.globals.use_deepspeed_evo_attention = True 

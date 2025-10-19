@@ -1,58 +1,49 @@
 #!/bin/bash
 
 # Request a GPU partition node and access to 1 GPU per task
-#SBATCH -p 3090-gcondo --gres=gpu:1
+#SBATCH -p gpu --gres=gpu:1
 #SBATCH -N 1
 #SBATCH -n 4
 
 #SBATCH --mem=80G
-#SBATCH -t 6:00:00
+#SBATCH -t 12:00:00
 
 ## Provide a job name
-#SBATCH -J colinoscopy
+#SBATCH -J 2Y3C_baseline
 
-#SBATCH -o ../output/logs/slurm_out/colinoscopy_test_%A_%a.out
-#SBATCH -e ../output/logs/slurm_out/colinoscopy_test_%A_%a.err
-
-# module purge
-# module load miniforge
-# source /oscar/runtime/software/external/miniforge/23.11.0-0/etc/profile.d/conda.sh
-# module load cuda/12.1.1-ebglvvq
-# module load gcc/10.1.0-mojgbnp
-# export PYTHONUSERBASE=/nonexistent
-# export CUTLASS_PATH=/gpfs/data/rsingh47/hp_protein_folding/protein_folding/openfold/cutlass/
-# source activate
-# conda activate hp_openfold
-
-nvidia-smi
+#SBATCH -o ../output/logs/sro_slurm_out/2Y3C_baseline_%A_%a.out
+#SBATCH -e ../output/logs/sro_slurm_out/2Y3C_baseline_%A_%a.err
 
 GPFS_DIR="/gpfs/data/rsingh47/hp_protein_folding/protein_folding"
 BASE_DATA_DIR="$GPFS_DIR/data"
 TEMPLATE_MMCIF_DIR="$BASE_DATA_DIR/mmcif"
 
-# Subdirectories for input FASTA files
+# SRO parameters
+SRO_BLOCKS=0
+SRO_COMPARE_ENERGY=false
+SRO_ENERGY_EVAL=true
+SRO_PH=5.0
+SRO_TEMPERATURE=300.0
+# Paths for SRO models we are using
+SRO_MODEL_CONFIG="/gpfs/data/rsingh47/hp_protein_folding/protein_folding/output/refinement_model/p7_ph5_lr_2e-3_tri_prior/model_config.json"
+SRO_MODEL_WEIGHT="/gpfs/data/rsingh47/hp_protein_folding/protein_folding/output/refinement_model/p7_ph5_lr_2e-3_tri_prior/best_model.pt"
+
+# Subdirectories for input FASTA files (can have more than one...)
 INPUT_FASTA_DIRS=(
     "$BASE_DATA_DIR/fasta/2Y3C_A"
-    # "$GPFS_DIR/data/fasta/6kwc_mut/gpu0"
-    # "$GPFS_DIR/data/fasta/6kwc_mut/gpu1"
-    # "$GPFS_DIR/data/fasta/6kwc_mut/gpu2"
 )
 
 # Output directories corresponding to each input
 OUTPUT_DIRS=(
-    "$GPFS_DIR/output"
-    # "$GPFS_DIR/output/6kwc_mut/gpu0"
-    # "$GPFS_DIR/output/6kwc_mut/gpu1"
+    "$GPFS_DIR/output/examples/full_sro_testing/2Y3C_baseline"
 )
 
 PRECOMPUTED_ALIGNMENTS=(
     "$BASE_DATA_DIR/precomputed_alignments"
-    # "$GPFS_DIR/output/6kwc/alignments"
 )
 
 WANDB_PROJECTS=(
-    "3JAV_A"
-    # "6kwc_mut"
+    "sro_debugging"
 )
 
 # Determine the input and output directories based on SLURM task ID
@@ -64,7 +55,9 @@ WANDB_PROJECT="${WANDB_PROJECTS[$SLURM_ARRAY_TASK_ID]}"
 mkdir -p "$OUTPUT_DIR"
 
 # Run the OpenFold script on the assigned GPU
-CUDA_VISIBLE_DEVICES=0 python3 run_pretrained_openfold.py \
+
+# build command as a string
+CMD="python3 run_pretrained_openfold.py \
     $INPUT_FASTA_DIR \
     $TEMPLATE_MMCIF_DIR \
     --config_preset model_3 \
@@ -78,4 +71,23 @@ CUDA_VISIBLE_DEVICES=0 python3 run_pretrained_openfold.py \
     --cpus 4 \
     --cif_output \
     --use_precomputed_alignments $PRECOMPUTED_ALIGNMENTS \
-    # --output_intermed_structs
+    --sro_blocks $SRO_BLOCKS \
+    --sro_pH $SRO_PH \
+    --sro_temp $SRO_TEMPERATURE \
+    --sro_model_config_path $SRO_MODEL_CONFIG \
+    --sro_model_path $SRO_MODEL_WEIGHT \
+"
+# --output_intermed_structs
+# --save_pca_embeddings 10
+
+# Add SRO compare energy/eval to command if they are set
+if [ "$SRO_COMPARE_ENERGY" = true ]; then
+    CMD="$CMD --sro_compare_energy"
+fi
+if [ "$SRO_ENERGY_EVAL" = true ]; then
+    CMD="$CMD --sro_energy_eval"
+fi
+
+# Run the command
+CUDA_VISIBLE_DEVICES=0
+$CMD

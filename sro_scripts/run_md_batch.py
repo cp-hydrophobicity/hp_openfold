@@ -15,22 +15,12 @@ from Bio import PDB
 import numpy as np
 from openfold.np import protein
 from openfold.np.relax import amber_minimize
-from openfold.utils.md.md_utils import run_md
 from openfold.utils.md.energy_utils import calculate_energy
-from openfold.utils.md.solvation_utils import strip_solvent_from_pdb
-from openfold.utils.md.water_analysis import analyze_water_density_fluctuations, extract_trajectory_frames
+from openfold.utils.md.md_utils import run_md
+from openfold.utils.md.solvation_utils import strip_solvent
 
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-
-ch = logging.StreamHandler()
-ch.setLevel(logging.INFO)
-
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-ch.setFormatter(formatter)
-
-logger.addHandler(ch)
-
+from log_utils import configure_logging
+logger = configure_logging()
 
 def cleanup_work_directory(directory_path: str) -> None:
     if not os.path.exists(directory_path):
@@ -64,9 +54,7 @@ def process_structure_file(
     report_interval: int = 1000,
     box_buffer: float = 0.5,
     timestep: float = 0.002,
-    pH: Optional[float] = 7.0,
-    analyze_water: bool = False,
-    water_voxel_size: float = 1.0,
+    pH: Optional[float] = 7.0
 ) -> str:
     """
     Process a single structure file through MD simulation with an initial relaxation step.
@@ -173,8 +161,6 @@ def process_structure_file(
             box_buffer=box_buffer,
             timestep=timestep,
             pH=pH,
-            analyze_water=analyze_water,
-            water_voxel_size=water_voxel_size,
             save_trajectory=False,
             save_individual_frames=keep_work_files,
             save_final_structure=False,
@@ -234,8 +220,6 @@ def main():
     parser.add_argument("--box_buffer", type=float, default=0.5, help="Buffer distance (in nm) around protein for solvation box")
     parser.add_argument("--timestep", type=float, default=0.002, help="Integration time step in picoseconds")
     parser.add_argument("--pH", type=float, default=7.0, help="pH value for protein protonation (affects titratable residues)")
-    parser.add_argument("--analyze_water", action="store_true", help="Analyze water density fluctuations and save results")
-    parser.add_argument("--water_voxel_size", type=float, default=1.0, help="Voxel size in Angstroms for water density analysis")
     
     args = parser.parse_args()
     
@@ -272,9 +256,7 @@ def main():
                 report_interval=args.report_interval,
                 box_buffer=args.box_buffer,
                 timestep=args.timestep,
-                pH=args.pH,
-                analyze_water=args.analyze_water,
-                water_voxel_size=args.water_voxel_size
+                pH=args.pH
             )
             
             if final_pdb:

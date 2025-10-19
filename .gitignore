@@ -5,11 +5,12 @@ __pycache__/
 build
 dist
 wandb
+.ipynb_checkpoints/
 
 cp_log/
 
 # files from script downloads
-data
+# data
 openfold/resources/
 tests/test_data/
 cutlass/

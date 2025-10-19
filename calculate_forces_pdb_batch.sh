@@ -9,8 +9,8 @@
 ## Provide a job name
 #SBATCH -J pdb70_forces
 
-#SBATCH -o ../output_mmc/logs/forces_slurm_out/pdb70_forces_%A_%a.out
-#SBATCH -e ../output_mmc/logs/forces_slurm_out/pdb70_forces_%A_%a.err
+#SBATCH -o ../output/logs/forces_slurm_out/pdb70_forces_%A_%a.out
+#SBATCH -e ../output/logs/forces_slurm_out/pdb70_forces_%A_%a.err
 
 GPFS_DIR="/gpfs/data/rsingh47/hp_protein_folding/protein_folding"
 BASE_DATA_DIR="$GPFS_DIR/data"
@@ -20,7 +20,7 @@ TEMPLATE_MMCIF_DIR="$BASE_DATA_DIR/mmcif"
 GROUP_NUM=$SLURM_ARRAY_TASK_ID
 
 INPUT_FASTA_DIR="$BASE_DATA_DIR/fasta/pdb70_fasta/group${GROUP_NUM}"
-OUTPUT_DIR="$GPFS_DIR/output_mmc/logs"
+OUTPUT_DIR="$GPFS_DIR/output"
 mkdir -p "$OUTPUT_DIR"
 PRECOMPUTED_ALIGNMENTS="$BASE_DATA_DIR/precomputed_alignments"
 
@@ -59,11 +59,11 @@ if [ "$NUM_PROTEINS" -gt 0 ]; then
     
     # calculate forces at pH 7.0
     echo "Calculating forces at pH 7.0..."
-    ./calculate_forces_batch.sh --pH 7.0 $(cat "$PROTEIN_DIRS_FILE")
+    ./calculate_forces_batch.sh --pH 7.4 $(cat "$PROTEIN_DIRS_FILE")
     
-    # calculate forces at pH 5.0
-    echo "Calculating forces at pH 5.0..."
-    ./calculate_forces_batch.sh --pH 5 $(cat "$PROTEIN_DIRS_FILE")
+    # # calculate forces at pH 5.0
+    # echo "Calculating forces at pH 5.0..."
+    # ./calculate_forces_batch.sh --pH 5 $(cat "$PROTEIN_DIRS_FILE")
     
     echo "Force calculation complete for group ${GROUP_NUM}"
 else

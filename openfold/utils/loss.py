@@ -32,6 +32,7 @@ import logging
 from openfold.utils.tensor_utils import tensor_tree_map
 
 logger = logging.getLogger(__name__)
+logger.setLevel(level=logging.INFO)
 
 
 def softmax_cross_entropy(logits, labels):

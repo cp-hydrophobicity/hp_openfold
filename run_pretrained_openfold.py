@@ -190,8 +190,8 @@ def main(args):
         sro_blocks=args.sro_blocks,
         sro_temp=args.sro_temp,
         sro_pH=args.sro_pH,
-        sro_step_eval=args.sro_step_eval,
-        sro_model_path=args.sro_model_path,
+        sro_energy_eval=args.sro_energy_eval,
+        sro_compare_energy=args.sro_compare_energy,
         save_pca_embeddings=args.save_pca_embeddings,
     )
 
@@ -390,6 +390,14 @@ def main(args):
 
             logger.info(f"Output written to {unrelaxed_output_path}...")
 
+            # log the energy of unrelaxed protein
+            from openfold.model.sro.core import _prot_to_energy
+            try:
+                energy = _prot_to_energy(unrelaxed_protein)
+                logger.info(f"Unrelaxed protein energy: {energy}")
+            except Exception as e:
+                logger.warning(f"Failed to calculate energy of unrelaxed protein: {str(e)}")
+
             if not args.skip_relaxation:
                 # Relax the prediction.
                 logger.info(f"Running relaxation on {unrelaxed_output_path}...")
@@ -418,6 +426,12 @@ def main(args):
                     continue
                 end = time.time()
                 logger.info(f"Relaxation time: {end - start}")
+
+            if args.sro_blocks > 0 or args.sro_energy_eval:
+                # remove all tmp.top files in root directory from failed relaxations
+                for file in os.listdir():
+                    if file.startswith("tmp.top") or file.startswith("temp.top"):
+                        os.remove(file)
 
             if args.save_outputs:
                 output_dict_path = os.path.join(
@@ -556,8 +570,12 @@ if __name__ == "__main__":
         help="pH for SRO (default: 7.0)",
     )
     parser.add_argument(
-        "--sro_step_eval", action="store_true", default=False,
+        "--sro_energy_eval", action="store_true", default=False,
         help="Whether to evaluate SRO at each step, choosing embedding yielding lower energy (default: False)",
+    )
+    parser.add_argument(
+        "--sro_compare_energy", action="store_true", default=False,
+        help="Whether to compare energies of original and SRO structures (default: False)",
     )
     parser.add_argument(
         "--save_pca_embeddings", type=int, default=0,

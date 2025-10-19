@@ -1,3 +1,4 @@
+import os
 import contextlib
 import tempfile
 from pathlib import Path
@@ -5,17 +6,18 @@ import logging
 import time
 
 logger = logging.getLogger(__name__)
+logger.setLevel(level=logging.INFO)
 
 @contextlib.contextmanager
 def work_dir(output_dir: str, prefix: str = 'md_work_'):
     """Context manager for creating and managing a working directory.
     
     Args:
-        output_dir: Base output directory
-        prefix: Prefix for the work directory name
+        output_dir: base output directory
+        prefix: prefix for the work directory name
     
     Returns:
-        None
+        none
     """
 
     Path(output_dir).mkdir(parents=True, exist_ok=True)

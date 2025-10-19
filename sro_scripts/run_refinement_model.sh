@@ -1,8 +1,8 @@
 #!/bin/bash
 
 #SBATCH --job-name=mmc_refinement_training_p7_ph5_lr_2e-3_tri_prior_no_forces
-#SBATCH --output=../output_mmc/logs/train_p7_ph5_lr_2e-3_tri_prior_no_forces_%j.out
-#SBATCH --error=../output_mmc/logs/train_p7_ph5_lr_2e-3_tri_prior_no_forces_%j.err
+#SBATCH --output=../output/logs/train_p7_ph5_lr_2e-3_tri_prior_no_forces_%j.out
+#SBATCH --error=../output/logs/train_p7_ph5_lr_2e-3_tri_prior_no_forces_%j.err
 
 #SBATCH -p 3090-gcondo --gres=gpu:4
 #SBATCH -N 1
@@ -23,9 +23,9 @@ USE_SLURM=true                       # Set to false for local training with torc
 
 # Paths (update these paths for your system)
 SCRIPT_PATH="run_refinement_model.py"  # Direct path to the Python script
-PREDICTIONS_DIR="../output_mmc/predictions"
-OUTPUT_DIR="../output_mmc/refinement_model/p7_ph5_lr_2e-3_tri_prior_no_forces"
-DATA_DIR="../output_mmc/refinement_model/ph5_data"  # Leave empty to scan predictions directory, or set to a previous output directory
+PREDICTIONS_DIR="../output/predictions"
+OUTPUT_DIR="../output/refinement_model/p7_ph5_lr_2e-3_tri_prior_no_forces"
+DATA_DIR="../output/refinement_model/ph5_data"  # Leave empty to scan predictions directory, or set to a previous output directory
 NAME="p7_ph5_lr_2e-3_tri_prior_no_forces"
 # JAX_PARAM_PATH="/path/to/jax_params"
 
@@ -35,10 +35,10 @@ USE_WANDB="--use_wandb"  # Remove this variable or set to empty string if not us
 # MAX_SEQUENCE_LENGTH=256  # Set to empty string or comment out if you don't want to limit sequence length
 
 # Binary Settings
-SIMPLE_MODEL=false
 INITIALIZE_TRIANGLE_PRIOR=true
 NO_FILM=false
 TRAIN_WITHOUT_FORCES=true
+USE_ATTENTION=true
 
 # Optimizer Settings
 LEARNING_RATE=2e-3
@@ -66,7 +66,6 @@ RMSD_WEIGHT=0.02
 # Model hyperparameters
 NUM_CYCLES=1 # Default decay values for 3 is [1.0, 0.5, 0.25], for 2 is [1.0, 0.3], for 1 is [1.0]
 C_Z=128
-C_S=384
 C_HIDDEN_MUL=128
 C_HIDDEN_ATT=32
 NO_HEADS_PAIR=4
@@ -77,9 +76,10 @@ DROPOUT_RATE=0.1
 NUM_WORKERS=4
 EVAL_EVERY=1
 MAX_GRAD_NORM=0.1
-TEMPERATURE=300.0
+TEMPERATURE=310.0
 SEED=42
 CONFIG_PRESET="model_3"
+PROJECT_NAME="SRO_Architectures"
 
 ###############################
 # End User-Defined Settings   #
@@ -94,7 +94,6 @@ CMD_ARGS="\
   --output_dir $OUTPUT_DIR \
   --pH $PH \
   $USE_WANDB \
-  $USE_SIMPLE_MODEL \
   --c_z $C_Z \
   --c_hidden_mul $C_HIDDEN_MUL \
   --c_hidden_att $C_HIDDEN_ATT \
@@ -127,6 +126,7 @@ CMD_ARGS="\
   --clip_grad_mode $CLIP_GRAD_MODE \
   --warmup_epochs $WARMUP_EPOCHS \
   --name $NAME \
+  --project_name $PROJECT_NAME \
   "
 
 # Add binary settings using if statements
@@ -142,8 +142,8 @@ if [ "$TRAIN_WITHOUT_FORCES" = true ]; then
   CMD_ARGS="$CMD_ARGS --train_without_forces"
 fi
 
-if [ "$SIMPLE_MODEL" = true ]; then
-  CMD_ARGS="$CMD_ARGS --simple_model"
+if [ "$USE_ATTENTION" = false ]; then
+  CMD_ARGS="$CMD_ARGS --no_attention"
 fi
 
 # Add optional parameters if specified

@@ -25,6 +25,7 @@ from openfold.utils.multi_chain_permutation import multi_chain_permutation_align
 from tests.config import consts
 import logging
 logger = logging.getLogger(__name__)
+logger.setLevel(level=logging.INFO)
 
 
 @unittest.skipIf(not consts.is_multimer or consts.template_mmcif_dir is None, "Template mmcif dir required.")

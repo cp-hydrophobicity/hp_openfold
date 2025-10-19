@@ -19,6 +19,8 @@ from pytorch_lightning.utilities.deepspeed import (
     convert_zero_checkpoint_to_fp32_state_dict
 )
 
+from openfold.model.sro.core import load_sro_model
+
 logging.basicConfig()
 logger = logging.getLogger(__file__)
 logger.setLevel(level=logging.INFO)
@@ -166,7 +168,7 @@ def run_model(model, batch, tag, output_dir, logger, wb_logger, args):
             generate_intermediates=model.config.output_intermed_structs,
         )
 
-        if args.sro_blocks > 0:
+        if model.config.evoformer_stack.sro_mode:
             if args.sro_model_path is None:
                 raise ValueError("--sro_model_path must be specified if --sro_blocks is > 0")
             if args.sro_model_config_path is None:
@@ -181,10 +183,14 @@ def run_model(model, batch, tag, output_dir, logger, wb_logger, args):
 
             model.evoformer.initialize_sro(
                 sro_model=sro_model, 
-                sro_temp=model.config.evoformer.sro_temp,
-                sro_pH=model.config.evoformer.sro_pH,
-                sro_step_eval=model.config.evoformer.sro_step_eval
+                sro_temp=model.config.evoformer_stack.sro_temp,
+                sro_pH=model.config.evoformer_stack.sro_pH,
+                sro_energy_eval=model.config.evoformer_stack.sro_energy_eval,
+                sro_compare_energy=model.config.evoformer_stack.sro_compare_energy,
             )
+        
+        if model.config.evoformer_stack.sro_energy_eval:
+            model.evoformer.set_energy_eval(energy_eval=True)
 
         out = model(batch, wb_logger)
         inference_time = time.perf_counter() - t

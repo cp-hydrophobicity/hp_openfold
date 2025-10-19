@@ -133,7 +133,8 @@ class RefinementLoss(AlphaFoldLoss):
 
         batch = atom37_to_frames(batch)
         batch = get_backbone_frames(batch)
-        out['final_atom_positions'] = out['sm']['positions'][-1]
+        if "final_atom_positions" not in out.keys():
+            out['final_atom_positions'] = out['sm']['positions'][-1]
 
         device = batch['aatype'].device
         batch['resolution'] = (torch.ones(batch['aatype'].shape[0]) * 2.7).to(device)

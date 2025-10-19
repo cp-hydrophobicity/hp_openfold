@@ -10,8 +10,11 @@
 ## Provide a job name
 #SBATCH -J md_batch
 
-#SBATCH -o ../output_mmc/logs/slurm_out/md_batch_%A.out
-#SBATCH -e ../output_mmc/logs/slurm_out/md_batch_%A.err
+## CHANGE
+#SBATCH -o /gpfs/data/rsingh47/hp_protein_folding/protein_folding/output/logs/md_3000_final/md_batch_%A.out
+
+## CHANGE
+#SBATCH -e /gpfs/data/rsingh47/hp_protein_folding/protein_folding/output/logs/md_3000_final/md_batch_%A.err
 
 # module purge
 # module load miniforge
@@ -23,19 +26,20 @@
 # source activate
 # conda activate hp_openfold
 
+export PYTHONPATH="/gpfs/data/rsingh47/hp_protein_folding/protein_folding/openfold/"
+
 # Set up base directory
 GPFS_DIR="/gpfs/data/rsingh47/hp_protein_folding/protein_folding"
 
+# CHANGE
 # Default MD parameters
 TEMPERATURE=300.0
-N_STEPS=300000
+N_STEPS=3000000
 STIFFNESS=0.0  # Zero stiffness = no restraints
 TIMESTEP=0.002  # Integration timestep in picoseconds
-pH=5.0  # pH value for protein protonation
+pH=7.4  # pH value for protein protonation
 REPORT_INTERVAL=100  # Reporting interval for trajectory and logs
 FILE_PATTERN="*.pdb"  # Default pattern to match PDB files
-ANALYZE_WATER=false  # Set to true to enable water density analysis
-WATER_VOXEL_SIZE=1.0  # Voxel size in Angstroms for water density analysis
 KEEP_WORK_FILES=false  # Set to false to remove temporary files after completion
 
 usage() {
@@ -49,10 +53,7 @@ usage() {
     echo "  -p, --pH VALUE             Set pH value (default: $pH)"
     echo "  -i, --interval, --report-interval VALUE       Set reporting interval (default: $REPORT_INTERVAL)"
     echo "  -f, --file-pattern PATTERN Set file pattern to match (default: $FILE_PATTERN)"
-    echo "  -w, --analyze-water        Enable water density analysis"
-    echo "  -v, --voxel-size VALUE     Set water voxel size in Å (default: $WATER_VOXEL_SIZE)"
     echo "  -k, --keep-work-files      Keep temporary files after completion (default: $KEEP_WORK_FILES)"
-    echo "  -n, --no-keep-work-files   Remove temporary files after completion"
     echo ""
     echo "Example: $0 /path/to/dir1 /path/to/dir2"
     exit 1
@@ -93,20 +94,8 @@ while [[ $# -gt 0 ]]; do
             FILE_PATTERN="$2"
             shift 2
             ;;
-        -w|--analyze-water)
-            ANALYZE_WATER=true
-            shift
-            ;;
-        -v|--voxel-size)
-            WATER_VOXEL_SIZE="$2"
-            shift 2
-            ;;
         -k|--keep-work-files)
             KEEP_WORK_FILES=true
-            shift
-            ;;
-        -n|--no-keep-work-files)
-            KEEP_WORK_FILES=false
             shift
             ;;
         -*)
@@ -139,7 +128,7 @@ for INPUT_DIR in "${DIRS[@]}"; do
     BASE_NAME=$(basename "$INPUT_DIR")
     
     # create output directory one level up from the input directory
-    OUTPUT_DIR="$PARENT_DIR/md_ph_${pH}_${BASE_NAME}_long"
+    OUTPUT_DIR="$PARENT_DIR/md_ph_${pH}_${BASE_NAME}_${N_STEPS}_final"
     mkdir -p "$OUTPUT_DIR"
     
     echo ""
@@ -154,10 +143,6 @@ for INPUT_DIR in "${DIRS[@]}"; do
     echo "  Timestep: $TIMESTEP ps"
     echo "  pH: $pH"
     echo "  Report interval: $REPORT_INTERVAL"
-    echo "  Analyze water: $ANALYZE_WATER"
-    if [ "$ANALYZE_WATER" = true ]; then
-        echo "  Water voxel size: $WATER_VOXEL_SIZE Å"
-    fi
     echo "=============================================="
     
     # run the batch MD simulation for this directory
@@ -173,9 +158,7 @@ for INPUT_DIR in "${DIRS[@]}"; do
         $([ "$KEEP_WORK_FILES" = true ] && echo "--keep_work_files") \
         --report_interval "$REPORT_INTERVAL" \
         --timestep "$TIMESTEP" \
-        --pH "$pH" \
-        $([ "$ANALYZE_WATER" = true ] && echo "--analyze_water") \
-        --water_voxel_size "$WATER_VOXEL_SIZE"
+        --pH "$pH"
     
     # check if the command was successful
     if [ $? -eq 0 ]; then

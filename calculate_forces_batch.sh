@@ -10,8 +10,8 @@
 ## Provide a job name
 #SBATCH -J forces_batch
 
-#SBATCH -o ../output_mmc/logs/slurm_out/forces_batch_%A.out
-#SBATCH -e ../output_mmc/logs/slurm_out/forces_batch_%A.err
+#SBATCH -o ../output/logs/slurm_out/forces_batch_%A.out
+#SBATCH -e ../output/logs/slurm_out/forces_batch_%A.err
 
 # set up base directory
 GPFS_DIR="/gpfs/data/rsingh47/hp_protein_folding/protein_folding"

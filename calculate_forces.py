@@ -10,10 +10,10 @@ from openfold.np import protein
 from openfold.utils.md.energy_utils import calculate_energy
 
 logging.basicConfig(
-    level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
+logger.setLevel(level=logging.INFO)
 
 def log_time(step_name, start_time):
     elapsed = time.time() - start_time
@@ -57,9 +57,8 @@ def main():
         solvent=args.solvent,
         box_buffer=args.box_buffer,
         pH=args.pH,
-        detailed=args.detailed,
         get_forces=True,
-        per_residue_forces=args.per_residue_forces,
+        # per_residue_forces=args.per_residue_forces,
     )
     log_time("Calculate energy and forces", start_time)
     start_time = time.time()

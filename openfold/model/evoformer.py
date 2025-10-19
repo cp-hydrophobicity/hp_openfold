@@ -45,8 +45,13 @@ from openfold.utils.chunk_utils import chunk_layer, ChunkSizeTuner
 from openfold.utils.tensor_utils import add
 from openfold.utils.feats import atom14_to_atom37
 from openfold.utils.custom_logging import WandBLogger
+from openfold.model.sro.core import _sm_out_to_protein, _prot_to_energy
 
 from sklearn.decomposition import PCA
+
+import logging
+py_logger = logging.getLogger(__name__)
+py_logger.setLevel(level=logging.INFO)
 
 
 class MSATransition(nn.Module):
@@ -188,7 +193,7 @@ class PairStack(nn.Module):
         inplace_safe: bool = False,
         _mask_trans: bool = True,
         _attn_chunk_size: Optional[int] = None,
-        logger: WandBLogger = None,
+        wb_logger: WandBLogger = None,
         no_blocks: int = None,
     ) -> torch.Tensor:
         # DeepMind doesn't mask these transitions in the source, so _mask_trans
@@ -234,7 +239,7 @@ class PairStack(nn.Module):
                         use_deepspeed_evo_attention=use_deepspeed_evo_attention,
                         use_lma=use_lma,
                         inplace_safe=inplace_safe,
-                        logger=logger,
+                        wb_logger=wb_logger,
                     )
         z = add(z,
                 self.ps_dropout_row_layer(
@@ -480,7 +485,7 @@ class EvoformerBlock(MSABlock):
         _attn_chunk_size: Optional[int] = None,
         _offload_inference: bool = False,
         _offloadable_inputs: Optional[Sequence[torch.Tensor]] = None,
-        logger: WandBLogger = None,
+        wb_logger: WandBLogger = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
 
         msa_trans_mask = msa_mask if _mask_trans else None
@@ -591,7 +596,7 @@ class EvoformerBlock(MSABlock):
             _mask_trans=_mask_trans,
             _attn_chunk_size=_attn_chunk_size,
             step_no=step_no,
-            logger=logger,
+            wb_logger=wb_logger,
             no_blocks=self.no_blocks,
         )
 
@@ -620,9 +625,8 @@ class EvoformerBlock(MSABlock):
             int_atom_pos = atom14_to_atom37(
                 sm["positions"][-1], feats
             )
-            # logger.save_tensor_to_npz(int_atom_pos, data_name=f"atom_positions_subcycle={step_no}", subdir_name="atom_positions")
-            logger.save_atoms_to_pdb(int_atom_pos, feats, step_no, subdir_name="pdbs")
-            logger.save_intermediate_dict(s_inputs, feats, step_no, subdir_name="intermediate_checkpoints")
+            wb_logger.save_atoms_to_pdb(int_atom_pos, feats, step_no, subdir_name="pdbs")
+            wb_logger.save_intermediate_dict(s_inputs, feats, step_no, subdir_name="intermediate_checkpoints")
 
         return m, z
 
@@ -683,62 +687,121 @@ class EvoformerBlockSROWrapper(EvoformerBlock):
         
         return atom14_to_atom37(sm["positions"][-1], feats)
 
-    def initialize_sro(self, sro_model, sro_temp=300.0, sro_pH=7.0, sro_step_eval=False):
+    def set_energy_eval(self, energy_eval):
+        self.energy_eval = energy_eval
+
+    def initialize_sro(self, sro_model, sro_temp=300.0, sro_pH=7.0, sro_energy_eval=False, sro_compare_energy=False):
         """
         Initialize the SRO model for the EvoformerBlock.
         """
         self.sro_model = sro_model
         self.sro_temp = sro_temp
         self.sro_pH = sro_pH
-        self.sro_step_eval = sro_step_eval
+        self.sro_energy_eval = sro_energy_eval
+        self.sro_compare_energy = sro_compare_energy
 
     def forward(self, m, z, **kwargs):
-        if not self.sro_mode:
-            return super().forward(m, z, **kwargs)
-        
         # Run standard forward pass
-        m, z = super().forward(m, z, **kwargs)
+        m_prev, z_prev = super().forward(m, z, **kwargs)
 
         # Prepare structure inputs for both previous and current states
         s_inputs_prev = self.prepare_structure_inputs(m_prev, z_prev, **kwargs)
 
+        # dump a protein for debugging
+        feats = kwargs.get("feats")
+        step_no = kwargs.get("step_no")
+        wb_logger = kwargs.get("wb_logger")
+
+        if not self.sro_mode:
+            # only log if in last 10 blocks noting multiple cycles and 48 blocks per cycle
+            if self.energy_eval and step_no % 48 > 37:
+                sm_prev = self.structure_module(
+                    s_inputs_prev,
+                    feats["aatype"] if "aatype" in feats else None,
+                    mask=feats["seq_mask"],
+                    inplace_safe=False,
+                )
+                old_prot = _sm_out_to_protein(sm_prev, feats)
+                old_energy_success = True
+                try:
+                    old_energy = _prot_to_energy(old_prot)
+                    py_logger.info(f"Original energy at step {step_no}: {old_energy}")
+                    wb_logger.log_metric("original_energy", old_energy, step=step_no)
+                except Exception as e:
+                    old_energy_success = False
+                    py_logger.info(f"Original energy at step {step_no} could not be calculated. {e}")
+            return m_prev, z_prev
+        
+        ### DELETE
+        # import pickle
+        # with open("prot.pkl", "wb") as f:
+        #     pickle.dump(prot, f)
+        ### DELETE
+
+        # access feats from kwargs
         sro_result = self.sro_model(
-            s_inputs_prev,
-            feats["aatype"],
-            mask=feats["seq_mask"].to(dtype=s_inputs_prev["single"].dtype),
-            inplace_safe=False,
+            s_inputs_prev["pair"],
+            s_inputs_prev["single"],
+            feats=feats,
+            seq_mask=feats["seq_mask"].to(dtype=s_inputs_prev["single"].dtype),
             temperature=self.sro_temp,
             pH=self.sro_pH,
+            return_final_positions=self.sro_energy_eval,
         )
-        z_new = sro_result["pair"]
-        s_inputs_new = self.prepare_structure_inputs(m, z_new, **kwargs)
-            
-        if self.sro_step_eval:
-            # TODO: Compare energies of both, if energy calculation invalid for both
-            # keep the SRO modification
-            prot = protein.Protein(
-                atom_positions=final_atom_pos,
-                aatype=sequence, 
-                atom_mask=atom_mask,
-                residue_index=residue_index,
-                b_factors=np.zeros_like(atom_mask)
-            )
-            
-            energy_result = calculate_energy(
-                prot=prot,
-                output_dir=tmp_dir,
-                use_gpu=torch.cuda.is_available(),
-                add_solvent=True,
-                pH=float(pH),
-                detailed=False,
-                get_forces=False
-            )
-        else:
-            z_return = z_new
+        if not sro_result["status"]:
+            py_logger.info(f"SRO failed at step {step_no}, using previous structure.")
+            return m_prev, z_prev
+        z_return = sro_result["pair"]
 
-        return m, z_return
+        if self.sro_energy_eval:            
+            # First evaluate energy of original structure
+            with torch.no_grad():
+                sm_prev = self.structure_module(
+                    s_inputs_prev,
+                    feats["aatype"] if "aatype" in feats else None,
+                    mask=feats["seq_mask"],
+                    inplace_safe=False,
+                )
+                sm_new = sro_result["sm"]
 
-        
+            # Calculate energies
+            old_prot = _sm_out_to_protein(sm_prev, feats)
+            new_prot = _sm_out_to_protein(sm_new, feats)
+
+            old_energy_success = True
+            new_energy_success = True
+            # TODO: check that the returned energy is not NaN/look at check_energy...
+            try:
+                old_energy = _prot_to_energy(old_prot)
+                py_logger.info(f"Original energy at step {step_no}: {old_energy}")
+                wb_logger.log_metric("original_energy", old_energy, step=step_no)
+            except:
+                old_energy_success = False
+                py_logger.info(f"Original energy at step {step_no} could not be calculated.")
+            try:
+                new_energy = _prot_to_energy(new_prot)
+                py_logger.info(f"New energy at step {step_no}: {new_energy}")
+                wb_logger.log_metric("new_energy", new_energy, step=step_no)
+            except:
+                new_energy_success = False
+                py_logger.info(f"New energy at step {step_no} could not be calculated.")
+
+            # Compare energies
+            if self.sro_compare_energy:
+                # use temperature to implement boltzmann constant, and probability of choice if new energy > old energy
+                if new_energy < old_energy:
+                    py_logger.info(f"New energy is lower, using new structure.")
+                    z_return = z_new
+                
+                boltzmann_factor = math.exp((old_energy - new_energy) / (self.sro_temp * 0.0019872041))
+                if random.random() < boltzmann_factor:
+                    py_logger.info(f"New energy is higher, but Boltzmann factor is higher, using new structure.")
+                    z_return = z_new
+                else:
+                    py_logger.info(f"Original energy was lower, using previous structure.")
+                    z_return = z_prev
+
+        return m, z_return        
 
 
 class ExtraMSABlock(MSABlock):
@@ -1066,9 +1129,13 @@ class EvoformerStack(nn.Module):
         for block in self.blocks:
             block.set_structure_module(structure_module=structure_module, compute_s=self.linear, generate_intermediates=generate_intermediates)
 
-    def initialize_sro(self, sro_model, sro_temp=300.0, sro_pH=7.0, sro_step_eval=False):
+    def set_energy_eval(self, energy_eval):
         for block in self.blocks:
-            block.initialize_sro(sro_model=sro_model, sro_temp=sro_temp, sro_pH=sro_pH, sro_step_eval=sro_step_eval)
+            block.set_energy_eval(energy_eval=energy_eval)
+
+    def initialize_sro(self, sro_model, sro_temp=300.0, sro_pH=7.0, sro_energy_eval=False, sro_compare_energy=False):
+        for block in self.blocks:
+            block.initialize_sro(sro_model=sro_model, sro_temp=sro_temp, sro_pH=sro_pH, sro_energy_eval=sro_energy_eval, sro_compare_energy=sro_compare_energy)
 
     def _prep_blocks(self, 
         m: torch.Tensor, 
@@ -1083,7 +1150,7 @@ class EvoformerStack(nn.Module):
         inplace_safe: bool,
         _mask_trans: bool,
         cycle_no: int,
-        logger: WandBLogger = None
+        wb_logger: WandBLogger = None
     ):
         
         # PM: partial initializes everything other than m, z
@@ -1102,7 +1169,7 @@ class EvoformerStack(nn.Module):
                 inplace_safe=inplace_safe,
                 _mask_trans=_mask_trans,
                 step_no=cycle_no * self.no_blocks + i,
-                logger=logger,
+                wb_logger=wb_logger,
             )
             for (i, b) in enumerate(self.blocks)
         ]
@@ -1142,7 +1209,7 @@ class EvoformerStack(nn.Module):
         use_lma: bool = False,
         use_flash: bool = False,
         _mask_trans: bool = True,
-        logger: WandBLogger = None,
+        wb_logger: WandBLogger = None,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         assert(not (self.training or torch.is_grad_enabled()))
         blocks = self._prep_blocks(
@@ -1190,7 +1257,7 @@ class EvoformerStack(nn.Module):
         use_flash: bool = False,
         inplace_safe: bool = False,
         _mask_trans: bool = True,
-        logger: WandBLogger = None,
+        wb_logger: WandBLogger = None,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Args:
@@ -1235,7 +1302,7 @@ class EvoformerStack(nn.Module):
             inplace_safe=inplace_safe,
             _mask_trans=_mask_trans,
             cycle_no=cycle_no,
-            logger=logger,
+            wb_logger=wb_logger,
         )
 
         blocks_per_ckpt = self.blocks_per_ckpt

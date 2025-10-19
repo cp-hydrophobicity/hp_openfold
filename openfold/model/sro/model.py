@@ -9,13 +9,14 @@ from openfold.model.triangular_attention import TriangleAttention, TriangleAtten
 from openfold.model.triangular_multiplicative_update import TriangleMultiplicationOutgoing, TriangleMultiplicationIncoming
 from openfold.model.pair_transition import PairTransition
 from openfold.model.primitives import Linear, LayerNorm
-from openfold.model.sro.core import evaluate_step, convert_forces_to_a14
+from openfold.model.sro.core import convert_forces_to_a14
 from openfold.np import protein
 
 from openfold.utils.tensor_utils import tensor_tree_map
 
 import logging
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 def log_memory(step_name):
     if torch.cuda.is_available():
@@ -120,14 +121,12 @@ def backprop_energy_gradient(structure_module: nn.Module,
             from openfold.np import protein, residue_constants
             from openfold.utils.md.energy_utils import calculate_energy
             
-            # Use the provided output directory or system temp directory
             if output_dir is not None:
-                # Create a subdirectory for temp files in the output directory
                 temp_dir = os.path.join(output_dir, 'energy_gradient_temp')
                 os.makedirs(temp_dir, exist_ok=True)
                 temp_dir_context = tempfile.TemporaryDirectory(dir=temp_dir)
             else:
-                temp_dir_context = tempfile.TemporaryDirectory()
+                temp_dir_context = tempfile.TemporaryDirectory(dir=os.getcwd())
                 
             with temp_dir_context as temp_dir:
                 atom_positions_np = atom_positions.detach().cpu().numpy()
@@ -291,11 +290,15 @@ class PairRefinementModule(nn.Module):
         dropout_rate: float = 0.1,
         use_forces: bool = True,
         use_film: bool = True,
+        use_attention: bool = True,
     ):
         super(PairRefinementModule, self).__init__()
         
         self.c_z = c_z
         self.use_forces = use_forces
+        self.use_attention = use_attention
+        self.use_forces = use_forces
+        self.use_film = use_film
         
         # Gradient conditioner (only used if use_forces=True)
         if use_forces:
@@ -312,16 +315,19 @@ class PairRefinementModule(nn.Module):
         )
         
         # Triangle attention layers
-        self.tri_att_start = TriangleAttentionStartingNode(
-            c_in=c_z,
-            c_hidden=c_hidden_att,
-            no_heads=no_heads
-        )
-        self.tri_att_end = TriangleAttentionEndingNode(
-            c_in=c_z,
-            c_hidden=c_hidden_att,
-            no_heads=no_heads
-        )
+        self.tri_att_start = None
+        self.tri_att_end = None
+        if use_attention:
+            self.tri_att_start = TriangleAttentionStartingNode(
+                c_in=c_z,
+                c_hidden=c_hidden_att,
+                no_heads=no_heads
+            )
+            self.tri_att_end = TriangleAttentionEndingNode(
+                c_in=c_z,   
+                c_hidden=c_hidden_att,
+                no_heads=no_heads
+            )
         
         # Pair transition for residual prediction
         self.pair_transition = PairTransition(
@@ -393,31 +399,31 @@ class PairRefinementModule(nn.Module):
         # log_memory("After triangle multiplication in")
         
         # Apply triangle attention
-        # log_memory("Before triangle attention start")
-        tri_att_start_update = self.tri_att_start(
-            z,
-            mask=mask,
-            chunk_size=chunk_size,
-            inplace_safe=inplace_safe
-        )
-        z = z + tri_att_start_update
-        # Free memo ry from intermediate tensor
-        # log_memory("After triangle attention start")
-        del tri_att_start_update
+        if self.use_attention:
+            tri_att_start_update = self.tri_att_start(
+                z,
+                mask=mask,
+                chunk_size=chunk_size,
+                inplace_safe=inplace_safe
+            )
+            z = z + tri_att_start_update
+            # Free memo ry from intermediate tensor
+            # log_memory("After triangle attention start")
+            del tri_att_start_update
 
-        # get_gpu_memory_usage(1, 1)
-        
-        # log_memory("Before triangle attention end")
-        tri_att_end_update = self.tri_att_end(
-            z,
-            mask=mask,
-            chunk_size=chunk_size,
-            inplace_safe=inplace_safe
-        )
-        z = z + tri_att_end_update
-        # Free memory from intermediate tensor
-        # log_memory("After triangle attention end")
-        del tri_att_end_update
+            # get_gpu_memory_usage(1, 1)
+            
+            # log_memory("Before triangle attention end")
+            tri_att_end_update = self.tri_att_end(
+                z,
+                mask=mask,
+                chunk_size=chunk_size,
+                inplace_safe=inplace_safe
+            )
+            z = z + tri_att_end_update
+            # Free memory from intermediate tensor
+            # log_memory("After triangle attention end")
+            del tri_att_end_update
         
         # Predict residual update
         # log_memory("Before pair transition")
@@ -449,6 +455,7 @@ class SubspaceRelaxationOperator(nn.Module):
         decay_factors: Optional[List[float]] = None,
         use_forces: bool = True,
         use_film: bool = True,
+        use_attention: bool = True,
         triangle_attention_initialized: bool = False,
     ):
         """
@@ -490,6 +497,7 @@ class SubspaceRelaxationOperator(nn.Module):
             dropout_rate=dropout_rate,
             use_forces=use_forces,
             use_film=use_film,
+            use_attention=use_attention,
         )
         
         # Initialize weights
@@ -509,8 +517,9 @@ class SubspaceRelaxationOperator(nn.Module):
         self._initialize_triangle_multiplication(self.pair_refinement_module.tri_mul_in)
         
         # Initialize triangle attention layers
-        self._initialize_triangle_attention(self.pair_refinement_module.tri_att_start)
-        self._initialize_triangle_attention(self.pair_refinement_module.tri_att_end)
+        if self.pair_refinement_module.use_attention:
+            self._initialize_triangle_attention(self.pair_refinement_module.tri_att_start)
+            self._initialize_triangle_attention(self.pair_refinement_module.tri_att_end)
         
         # Initialize pair transition with final layer zero-initialized
         self._initialize_pair_transition(self.pair_refinement_module.pair_transition)
@@ -690,7 +699,10 @@ class SubspaceRelaxationOperator(nn.Module):
         
         if pair_mask is None:
             # Create pair mask as outer product of single mask
-            pair_mask = torch.einsum('bi,bj->bij', seq_mask, seq_mask)
+            if seq_mask.dim() == 1:
+                pair_mask = torch.outer(seq_mask, seq_mask)
+            else:
+                pair_mask = torch.einsum('bi,bj->bij', seq_mask, seq_mask)
         
         # Ensure feats has the necessary masks
         if feats is None:
@@ -708,14 +720,21 @@ class SubspaceRelaxationOperator(nn.Module):
         # P6 PM: added use_forces check and set to None if not using...
         # Get gradients with respect to embeddings using backpropagation if using forces
         if hasattr(self.pair_refinement_module, 'use_forces') and self.pair_refinement_module.use_forces:
-            gradients = backprop_energy_gradient(
-                self.structure_module,
-                embeddings,
-                feats,
-                pH=pH,
-                external_grad=external_grad,
-                output_dir=output_dir
-            )
+            try:
+                gradients = backprop_energy_gradient(
+                    self.structure_module,
+                    embeddings,
+                    feats,
+                    pH=pH,
+                    external_grad=external_grad,
+                    output_dir=output_dir
+                )
+            except Exception as e:
+                logger.warning(f"Failed to compute gradients: {e}")
+                result = {
+                    "status": False
+                }
+                return result
             
             # Keep the gradients in the computation graph to ensure backward pass works
             pair_grad = gradients['pair'].clone()
@@ -772,7 +791,9 @@ class SubspaceRelaxationOperator(nn.Module):
             'pair': curr_pair_embed,
             'single': curr_single_embed,
             'positions': final_output['positions'],
+            'final_atom_positions': final_output['positions'][-1],
             'sm': final_output,
+            'status': True
         }
 
         # These are now stored in result, so safe to delete the original references

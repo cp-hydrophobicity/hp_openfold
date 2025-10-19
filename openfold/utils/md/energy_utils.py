@@ -10,10 +10,11 @@ import openmm.unit as unit
 
 from openfold.np import protein
 from openfold.np.relax import amber_minimize
-from openfold.utils.md.protonation_utils import ProtonationUtils
-from openfold.utils.md.solvation_utils import GromacsUtils
+from openfold.utils.md.protonation_utils import protonate
+from openfold.utils.md.solvation_utils import solvate
 
 logger = logging.getLogger(__name__)
+logger.setLevel(level=logging.INFO)
 
 
 def log_time(step_name, start_time):
@@ -29,38 +30,14 @@ def calculate_energy(
     solvent: str = 'water',
     box_buffer: float = 0.5,
     pH: float = 7.0,
-    detailed: bool = False,
     get_forces: bool = False,
-    per_residue_forces: bool = False,
     restraint_atoms: str = "none",
     stiffness: float = 0,  # kcal/mol/A^2
     exclude_residues: Optional[List[int]] = None,
     save_relaxed_pdb: bool = False,
+    return_pre_pe: bool = False,
 ) -> Dict[str, Any]:
-    """Calculate energy and optionally forces for a protein structure.
-    
-    This is the main function for energy/force calculations. It can calculate
-    just energy, just forces, or both together efficiently.
-    
-    Args:
-        prot: Protein object to analyze
-        output_dir: Directory for output files
-        use_gpu: Whether to use GPU acceleration
-        add_solvent: Whether to include explicit solvent
-        solvent: Type of solvent to use if add_solvent is True
-        box_buffer: Buffer distance (in nm) to add around protein dimensions
-        pH: The pH value to use for protein protonation
-        detailed: Whether to return detailed energy breakdown by force type
-        get_forces: Whether to calculate forces
-        per_residue_forces: Whether to calculate per-residue forces by summing atom forces
-        restraint_atoms: Which atoms to restrain ("non_hydrogen", "c_alpha", or "none")
-        stiffness: Spring constant for position restraints in kcal/mol/A^2
-        exclude_residues: List of residue indices to exclude from restraints
-        save_relaxed_pdb: Whether to save the relaxed PDB structure to the output directory
-        
-    Returns:
-        Dictionary containing energy and optionally force information
-    """
+    """Calculate energy and optionally forces for a protein structure."""
     total_start_time = time.time()
     start_time = total_start_time
     
@@ -70,7 +47,7 @@ def calculate_energy(
     log_time("Clean protein", start_time)
     start_time = time.time()
     
-    protonated_path, _ = ProtonationUtils.protonate_protein(
+    protonated_path, _ = protonate(
         pdb_str,
         output_dir=output_dir,
         pH=pH
@@ -79,7 +56,7 @@ def calculate_energy(
     start_time = time.time()
     
     if add_solvent:
-        solvated_path = GromacsUtils.solvate_with_gromacs(
+        solvated_path = solvate(
             protonated_path,
             output_dir=output_dir,
             solvent=solvent,
@@ -169,6 +146,9 @@ def calculate_energy(
         pre_state = simulation.context.getState(getEnergy=True)
     
     pre_pe = pre_state.getPotentialEnergy().value_in_unit(unit.kilojoule_per_mole)
+
+    if return_pre_pe:
+        return {"total_energy": pre_pe}
     
     simulation.minimizeEnergy()
     state = simulation.context.getState(getPositions=True)
@@ -217,12 +197,6 @@ def calculate_energy(
     log_time("Extract energy components", start_time)
     start_time = time.time()
     
-    if detailed:
-        force_energies = decompose_energy_by_force(simulation)
-        energies.update(force_energies)
-        log_time("Decompose energy by force", start_time)
-        start_time = time.time()
-    
     if not get_forces:
         return energies
     
@@ -253,100 +227,5 @@ def calculate_energy(
     log_time("Extract forces and positions", start_time)
     start_time = time.time()
     
-    if per_residue_forces:
-        result['residue_forces'] = calculate_residue_forces(
-            pdb, 
-            result['forces'], 
-            result['positions'], 
-            valid_indices if 'valid_indices' in result else None
-        )
-        log_time("Calculate per-residue forces", start_time)
-    
     log_time("TOTAL calculate_energy", total_start_time)
     return result
-
-
-def calculate_residue_forces(
-    pdb: openmm_app.PDBFile,
-    forces: np.ndarray,
-    positions: Optional[np.ndarray] = None,
-    valid_indices: Optional[List[int]] = None
-) -> List[Dict[str, Any]]:
-    """Calculate forces on each residue by summing atom forces.
-    
-    Args:
-        pdb: PDB file object with topology information
-        forces: Array of forces on each atom
-        positions: Optional array of atom positions
-        valid_indices: Optional list of valid atom indices to consider
-        
-    Returns:
-        List of dictionaries with residue force information, sorted by magnitude
-    """
-    residue_forces = {}
-    residue_positions = {} if positions is not None else None
-    
-    idx_map = {}
-    if valid_indices is not None:
-        for force_idx, atom_idx in enumerate(valid_indices):
-            idx_map[atom_idx] = force_idx
-    
-    for i, atom in enumerate(pdb.topology.atoms()):
-        if valid_indices is not None and i not in idx_map:
-            continue
-            
-        residue = atom.residue
-        residue_id = f"{residue.chain.id}:{residue.name}:{residue.id}"
-        
-        if residue_id not in residue_forces:
-            residue_forces[residue_id] = np.zeros(3)
-            if positions is not None:
-                residue_positions[residue_id] = []
-        
-        force_idx = idx_map[i] if valid_indices is not None else i
-        
-        residue_forces[residue_id] += forces[force_idx]
-        if positions is not None:
-            residue_positions[residue_id].append(positions[force_idx])
-    
-    residue_data = []
-    for residue_id, force in residue_forces.items():
-        residue_info = {
-            'residue_id': residue_id,
-            'force': force.tolist(),
-            'magnitude': np.linalg.norm(force),
-        }
-        
-        if positions is not None:
-            center = np.mean(residue_positions[residue_id], axis=0)
-            residue_info['center'] = center.tolist()
-        
-        residue_data.append(residue_info)
-    
-    residue_data.sort(key=lambda x: x['magnitude'], reverse=True)
-    return residue_data
-
-
-def decompose_energy_by_force(simulation: openmm_app.Simulation) -> Dict[str, float]:
-    """Decompose the energy of a system by force type.
-    
-    Args:
-        simulation: OpenMM simulation object
-        
-    Returns:
-        Dictionary of energy components by force type (in kJ/mol)
-    """
-    system = simulation.system
-    context = simulation.context
-    
-    energy_components = {}
-    
-    for i in range(system.getNumForces()):
-        force = system.getForce(i)
-        force_name = force.__class__.__name__
-        
-        force.setForceGroup(i)
-        energy = context.getState(getEnergy=True, groups={i}).getPotentialEnergy()
-        energy_components[force_name] = energy.value_in_unit(unit.kilojoule_per_mole)
-    
-    return energy_components
