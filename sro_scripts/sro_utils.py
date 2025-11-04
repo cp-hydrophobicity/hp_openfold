@@ -4,6 +4,7 @@ Shared utilities for SRO (Subspace Relaxation Operator) training and evaluation.
 
 import argparse
 import json
+import yaml
 import logging
 import os
 import random
@@ -121,6 +122,26 @@ def create_refinement_argument_parser():
     parser.add_argument('--name', type=str, default=None,
                         help='Name for the run')
     
+    # Lightning-specific arguments
+    parser.add_argument('--early_stopping_patience', type=int, default=0,
+                        help='Early stopping patience (0 to disable)')
+    parser.add_argument('--use_mixed_precision',
+                        type=lambda x: str(x).lower() == 'true', default=False,
+                        help='Use mixed precision training')
+    
+    # Dry run and testing options
+    parser.add_argument('--fast_dev_run',
+                        type=lambda x: str(x).lower() == 'true', default=False,
+                        help='Run 1 batch of train, val, and test to detect bugs')
+    parser.add_argument('--limit_train_batches', type=int, default=None,
+                        help='Limit number of training batches per epoch')
+    parser.add_argument('--limit_val_batches', type=int, default=None,
+                        help='Limit number of validation batches')
+    parser.add_argument('--limit_test_batches', type=int, default=None,
+                        help='Limit number of test batches')
+    parser.add_argument('--max_epochs_dry_run', type=int, default=None,
+                        help='Override max_epochs for dry runs (e.g., 1 or 2)')
+    
     # loss arguments
     parser.add_argument('--fape_weight', type=float, default=None,
                         help='Weight for FAPE loss')
@@ -168,11 +189,22 @@ def setup_output_directory(args):
         return base_output_dir
 
 def load_config_from_json(config_path: str):
+    """Load config from JSON or YAML file."""
+    
     with open(config_path, 'r') as f:
-        config_dict = json.load(f)
+        if config_path.endswith('.yaml') or config_path.endswith('.yml'):
+            config_dict = yaml.safe_load(f)
+        else:
+            config_dict = json.load(f)
     
     config = argparse.Namespace()
     for key, value in config_dict.items():
+        # Convert scientific notation strings to floats
+        if isinstance(value, str) and ('e-' in value or 'E-' in value):
+            try:
+                value = float(value)
+            except ValueError:
+                pass  # Keep as string if conversion fails
         setattr(config, key, value)
     
     return config
@@ -398,66 +430,27 @@ def initialize_optimizer(model, args, logger):
     return optimizer
 
 
-def initialize_scheduler(optimizer, data_loaders, args, logger):
-    """
-    Initialize learning rate scheduler with warmup and cosine annealing.
-    
-    Args:
-        optimizer: The optimizer to schedule
-        data_loaders: Dictionary containing train data loader
-        args: Parsed arguments containing scheduler settings
-        logger: Logger for info messages
-        
-    Returns:
-        dict: Dictionary containing warmup and main schedulers
-    """
-    # Calculate warmup steps based on gradient accumulation steps and warmup epochs
-    steps_per_epoch = len(data_loaders['train']) // args.gradient_acc_steps
-    # support fractional warmup epochs (e.g., 0.1 epochs)
-    warmup_steps = int(steps_per_epoch * args.warmup_epochs)
-    
-    logger.info(f"Using {args.warmup_epochs} warmup epochs ({warmup_steps} steps, {steps_per_epoch} steps per epoch)")
-    
-    # Calculate total steps for cosine annealing
-    total_steps = len(data_loaders['train']) * args.num_epochs // args.gradient_acc_steps
-    remaining_steps = total_steps - warmup_steps
-    
-    scheduler = {
-        'warmup': optim.lr_scheduler.LinearLR(
-            optimizer,
-            start_factor=0.1,
-            end_factor=1.0,
-            total_iters=warmup_steps
-        ),
-        'main': optim.lr_scheduler.CosineAnnealingLR(
-            optimizer,
-            T_max=remaining_steps,
-            eta_min=1e-6,  # Minimum learning rate
-        )
-    }
-    
-    return scheduler
 
-def initialize_loss_fn(args):
+def initialize_loss_fn(loss_config):
     loss_weights = {}
-    if args.fape_weight is not None:
-        loss_weights['fape'] = args.fape_weight
-    if args.distogram_weight is not None:
-        loss_weights['distogram'] = args.distogram_weight
-    if args.plddt_weight is not None:
-        loss_weights['plddt_loss'] = args.plddt_weight
-    if args.supervised_chi_weight is not None:
-        loss_weights['supervised_chi'] = args.supervised_chi_weight
-    if args.violation_weight is not None:
-        loss_weights['violation'] = args.violation_weight
-    if args.rmsd_weight is not None:
-        loss_weights['rmsd'] = args.rmsd_weight
+    if "fape_weight" in loss_config:
+        loss_weights['fape'] = loss_config['fape_weight']
+    if "distogram_weight" in loss_config:
+        loss_weights['distogram'] = loss_config['distogram_weight']
+    if "plddt_weight" in loss_config:
+        loss_weights['plddt_loss'] = loss_config['plddt_weight']
+    if "supervised_chi_weight" in loss_config:
+        loss_weights['supervised_chi'] = loss_config['supervised_chi_weight']
+    if "violation_weight" in loss_config:
+        loss_weights['violation'] = loss_config['violation_weight']
+    if "rmsd_weight" in loss_config:
+        loss_weights['rmsd'] = loss_config['rmsd_weight']
         
     loss_fn = RefinementLoss(loss_weights=loss_weights)
     
     return loss_fn
 
-def get_all_loaders(args, logger):
+def get_all_loaders(args, logger, num_workers, pin_memory, prefetch_factor):
     # Create datasets and data loaders
     logger.info("Creating datasets...")
     datasets = build_dataset(
@@ -468,19 +461,18 @@ def get_all_loaders(args, logger):
         filter_proteins=args.filter_proteins,
         max_samples_per_protein=args.max_samples_per_protein,
         max_sequence_length=args.max_sequence_length,
-        cache_embeddings=True,
     )
     
-    logger.info(f"Creating data loaders for world size {dist.get_world_size()}...")
+    logger.info(f"Creating data loaders...")
     data_loaders = create_data_loaders(
         datasets=datasets,
         batch_size=args.batch_size,
-        distributed=True,
-        world_size=dist.get_world_size(),
-        rank=args.local_rank,
         seed=args.seed,
         crop=args.train_crop,
-        val_crop=args.val_crop
+        val_crop=args.val_crop,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+        prefetch_factor=prefetch_factor,
     )
     
     return datasets, data_loaders

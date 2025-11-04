@@ -1,0 +1,57 @@
+# Simple test configuration for single Lightning run
+# Use this to test your setup before running the full sweep
+
+# Basic training parameters
+learning_rate: 1e-2
+weight_decay: 5e-4
+batch_size: 2
+max_grad_norm: 0.1
+beta1: 0.9
+beta2: 0.999
+warmup_epochs: 0.0
+num_epochs: 1
+gradient_acc_steps: 5 # change in full
+logging_frequency: 3 # change in full
+train_crop: 256
+val_crop: 1024
+
+# Architecture (simple configuration)
+c_hidden_mul: 64
+c_hidden_att: 32
+no_heads_pair: 2
+transition_n: 1
+num_cycles: 1
+dropout_rate: 0.1
+no_attention: false
+initialize_triangle_prior: false
+no_film: false
+train_without_forces: false
+
+# System Settings
+temperature: 310.0
+pH: 7.4
+
+# Logging
+use_wandb: true
+project_name: "SRO_Lightning_Test"
+seed: 42
+
+# Lightning specific
+use_mixed_precision: false
+early_stopping_patience: 0
+
+# Loss weights
+fape_weight: 1.0
+supervised_chi_weight: 1.0
+violation_weight: 1.0
+distogram_weight: 0.03
+plddt_weight: 0.03
+rmsd_weight: 0.02
+
+# dev dry run
+fast_dev_run: false
+limit_train_batches: 30
+limit_val_batches: 5
+limit_test_batches: 5
+max_epochs_dry_run: 1
+

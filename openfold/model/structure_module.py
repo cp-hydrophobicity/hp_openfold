@@ -968,6 +968,7 @@ class StructureModule(nn.Module):
 
         # [*, N, N, C_z]
         z = self.layer_norm_z(evoformer_output_dict["pair"])
+        print("s", s.requires_grad, s.grad_fn, "z", z.requires_grad, z.grad_fn)
 
         z_reference_list = None
         if (_offload_inference):
@@ -979,6 +980,7 @@ class StructureModule(nn.Module):
         # [*, N, C_s]
         s_initial = s
         s = self.linear_in(s)
+        print("s_lin", s.requires_grad, s.grad_fn)
 
         # [*, N]
         rigids = Rigid.identity(
@@ -988,6 +990,7 @@ class StructureModule(nn.Module):
             self.training,
             fmt="quat",
         )
+
         outputs = []
         for i in range(self.no_blocks):
             # [*, N, C_s]
@@ -1036,6 +1039,7 @@ class StructureModule(nn.Module):
                 aatype,
             )
 
+
             scaled_rigids = rigids.scale_translation(self.trans_scale_factor)
             
             preds = {
@@ -1046,7 +1050,6 @@ class StructureModule(nn.Module):
                 "positions": pred_xyz,
                 "states": s,
             }
-
             outputs.append(preds)
 
             rigids = rigids.stop_rot_gradient()
@@ -1060,6 +1063,8 @@ class StructureModule(nn.Module):
 
         outputs = dict_multimap(torch.stack, outputs)
         outputs["single"] = s
+
+        print("outputs", outputs["positions"].requires_grad, outputs["positions"].grad_fn)
 
         return outputs
 

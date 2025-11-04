@@ -1,0 +1,86 @@
+program: train_sro_lightning.py
+method: random
+entity: sorins_charlatans
+project: SRO_Lightning_Architecture_Sweep
+metric:
+  name: val/rmsd
+  goal: minimize
+
+parameters:
+  # --- Architecture (swept) ---
+  c_hidden_mul:
+    values: [64, 128]
+  c_hidden_att:
+    values: [32, 64]
+  no_heads_pair:
+    values: [2, 4]
+  transition_n:
+    values: [1, 2, 3]
+  num_cycles:
+    values: [1]
+  dropout_rate:
+    values: [0.1, 0.2]
+  no_attention:
+    values: [true, false]
+  initialize_triangle_prior:
+    values: [false] # can only be true if no_attention is false
+  no_film:
+    values: [false]
+  train_without_forces:
+    values: [false]
+
+  # --- Training HPs (fixed here) ---
+  learning_rate:
+    value: 1e-4
+  weight_decay:
+    value: 5e-4
+  batch_size:
+    value: 2
+  max_grad_norm:
+    value: 0.1
+  beta1:
+    value: 0.9
+  beta2:
+    value: 0.999
+  warmup_epochs:
+    value: 0.1
+  num_epochs:
+    value: 5
+  gradient_acc_steps:
+    value: 30
+  train_crop:
+    value: 256
+  val_crop:
+    value: 1024
+  
+  # --- Fixed paths and settings ---
+  data_dir:
+    value: "/gpfs/data/rsingh47/hp_protein_folding/protein_folding/output/sro_datasets/ph7.4_30000"
+  output_dir:
+    value: "/gpfs/data/rsingh47/hp_protein_folding/protein_folding/output/refinement_model/lightning_architecture_sweep"
+  pH:
+    value: 7.4
+  use_wandb:
+    value: true
+  project_name:
+    value: "SRO_Lightning_Architecture_Sweep"
+  seed:
+    value: 42
+  use_mixed_precision:
+    value: true
+  early_stopping_patience:
+    value: 3
+
+  # --- Loss Weights (fixed here) ---
+  fape_weight:
+    value: 1.0
+  supervised_chi_weight:
+    value: 1.0
+  violation_weight:
+    value: 1.0
+  distogram_weight:
+    value: 0.03
+  plddt_weight:
+    value: 0.03
+  rmsd_weight:
+    value: 0.02

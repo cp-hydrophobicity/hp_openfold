@@ -317,8 +317,9 @@ class ProteinDataCollator:
         
         first_sample = batch[0]
         
-        # Get sequence lengths for each sample in the batch
+        # Get sequence lengths and checkpoint numbers for each sample in the batch
         seq_lengths = []
+        checkpoint_numbers = []
         crop_ranges = []
         for sample in batch:
             if "sequence_length" in sample and sample["sequence_length"] is not None:
@@ -344,6 +345,7 @@ class ProteinDataCollator:
                     sample['embeddings']['feats'][key] = sample['embeddings']['feats'][key][crop_range[0]:crop_range[1]]
                     
                 seq_lengths.append(sample['sequence_length'])
+                checkpoint_numbers.append(sample.get("checkpoint_number", -1))
             else:
                 print(f"Sequence length not found in sample {sample}")
                 raise ValueError("Sequence length not found in sample")
@@ -542,6 +544,8 @@ class ProteinDataCollator:
         feats["seq_mask"] = seq_mask
         result["feats"] = feats
         result["seq_length"] = torch.tensor(seq_lengths)
+        result["checkpoint_number"] = torch.tensor(checkpoint_numbers)
+        
         result["metadata"] = metadata
         
         # Special handling for energy gradients (forces)
@@ -709,14 +713,13 @@ def get_dataloader(
 def create_data_loaders(
     datasets: Dict[str, Dataset],
     batch_size: int = 1,
-    val_batch_size: int = 1,
     feature_keys: List[str] = ["pair", "single", "ground_truth_atom_positions", "aatype", "residue_index"],
-    distributed: bool = False,
-    world_size: Optional[int] = None,
-    rank: Optional[int] = None,
     seed: int = 42,
     crop: Optional[int] = 256,
-    val_crop: Optional[int] = 1024
+    val_crop: Optional[int] = 1024,
+    num_workers: int = 0,
+    pin_memory: bool = True,
+    prefetch_factor: Optional[int] = 2,
 ) -> Dict[str, DataLoader]:
     """
     Create data loaders from datasets.
@@ -725,9 +728,7 @@ def create_data_loaders(
         datasets: Dictionary of datasets (train, val, test)
         batch_size: Batch size for the DataLoader
         feature_keys: List of keys to extract from the embeddings
-        distributed: Whether to use distributed training
         world_size: Number of processes participating in distributed training
-        rank: Rank of the current process
         seed: Random seed for reproducibility
         
     Returns:
@@ -747,44 +748,24 @@ def create_data_loaders(
             collator = ProteinDataCollator(feature_keys=feature_keys, crop=val_crop)
 
         
-        if distributed:
-            if rank is None or world_size is None:
-                raise ValueError("For distributed training, both rank and world_size must be provided")
-                
-            # Use standard distributed sampler
-            sampler = DistributedSampler(
-                dataset,
-                num_replicas=world_size,
-                rank=rank,
-                shuffle=shuffle,
-                seed=seed
-            )
-            
-            loaders[split] = DataLoader(
-                dataset=dataset,
-                batch_size=batch_size if split != "val" and split != "test" else val_batch_size,
-                sampler=sampler,
-                collate_fn=collator,
-                pin_memory=True,
-                drop_last=False
-            )
-        else:
-            # Non-distributed training
-            loaders[split] = DataLoader(
-                dataset=dataset,
-                batch_size=batch_size if split != "val" and split != "test" else val_batch_size,
-                shuffle=shuffle,
-                collate_fn=collator,
-                pin_memory=True,
-                drop_last=False
-            )
+        # Let Lightning handle distributed sampling automatically
+        loaders[split] = DataLoader(
+            dataset=dataset,
+            batch_size=batch_size,
+            shuffle=shuffle,
+            num_workers=num_workers,
+            collate_fn=collator,
+            prefetch_factor=prefetch_factor if num_workers > 0 else None,
+            pin_memory=pin_memory,
+            drop_last=False
+        )
     
     return loaders
 
 
 def build_dataset(
     predictions_dir: str,
-    pH: str = '5',
+    pH: str = '7.4',
     gt_dir: str = 'md_ph_5_pdbs',
     output_dir: Optional[str] = None,
     data_dir: Optional[str] = None,
@@ -1028,8 +1009,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Create protein refinement dataset")
     parser.add_argument("--predictions_dir", type=str, required=True, help="Path to predictions directory")
     parser.add_argument("--output_dir", type=str, help="Path to save processed dataset")
-    parser.add_argument("--pH", type=str, default="5.0", help="pH value for ground truth selection")
-    parser.add_argument("--gt_dir", type=str, default="md_ph_5_pdbs", help="Ground truth directory")
+    parser.add_argument("--pH", type=str, default="7.4", help="pH value for ground truth selection")
+    parser.add_argument("--gt_dir", type=str, default="md_ph_7_4_pdbs", help="Ground truth directory")
     parser.add_argument("--batch_size", type=int, default=1, help="Batch size")
     parser.add_argument("--num_workers", type=int, default=4, help="Number of workers")
     parser.add_argument("--cache_embeddings", action="store_true", help="Cache embeddings in memory")

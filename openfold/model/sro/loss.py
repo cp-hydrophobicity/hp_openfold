@@ -8,6 +8,7 @@ Simplified loss functions for SRO model training.
 import torch
 import torch.nn as nn
 import ml_collections
+import logging
 from typing import Dict, Optional, Tuple
 
 from openfold.utils.rigid_utils import Rotation, Rigid
@@ -26,6 +27,9 @@ from openfold.utils.loss import (
     compute_renamed_ground_truth,
     find_structural_violations
 )
+
+logger = logging.getLogger(__name__)
+logger.setLevel(level=logging.INFO)
 
 # Introduces pLDDT loss, has distogram
 loss_config = ml_collections.ConfigDict({
