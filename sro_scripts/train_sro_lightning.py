@@ -10,6 +10,7 @@ from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.strategies import DDPStrategy
 import torch
 import wandb
+from datetime import datetime
 
 # Add the parent directory to the path to import sro modules
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -22,6 +23,7 @@ from sro_utils import (
     setup_logging,
     save_config_to_json,
 )
+from evaluate_sro import run_evaluation
 
 logger = logging.getLogger(__name__)
 
@@ -33,8 +35,8 @@ def create_callbacks(args):
     # Model checkpointing
     checkpoint_callback = ModelCheckpoint(
         dirpath=os.path.join(args.output_dir, "checkpoints"),
-        filename="sro-{epoch:02d}-{val/rmsd:.4f}",
-        monitor="val/rmsd",
+        filename="sro-{epoch:02d}-{val/rmsd:.4f}-{val/loss:.4f}",
+        monitor="val/loss",
         mode="min",
         save_top_k=3,
         save_last=True,
@@ -45,7 +47,7 @@ def create_callbacks(args):
     # Early stopping
     if hasattr(args, 'early_stopping_patience') and args.early_stopping_patience > 0:
         early_stop_callback = EarlyStopping(
-            monitor="val/rmsd",
+            monitor="val/loss",
             mode="min",
             patience=args.early_stopping_patience,
             verbose=True,
@@ -61,14 +63,43 @@ def create_callbacks(args):
 
 def create_logger(args):
     """Create Lightning logger."""
+    # Create unique run directory with timestamp
+    # Format: YYYYMMDD_HHMMSS for easy sorting and identification
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_dir = os.path.join(args.output_dir, f"run_{timestamp}")
+    
+    # Update output_dir to the unique run directory
+    original_output_dir = args.output_dir
+    args.output_dir = run_dir
+    
+    # Create the directory
+    os.makedirs(args.output_dir, exist_ok=True)
+    
+    # Only print from rank 0 or if not in DDP mode
+    local_rank = int(os.environ.get("LOCAL_RANK", 0))
+    if local_rank == 0:
+        print(f"=" * 80)
+        print(f"Created unique run directory:")
+        print(f"  Base dir: {original_output_dir}")
+        print(f"  Run dir:  {args.output_dir}")
+        print(f"=" * 80)
+    
     if args.use_wandb:
-        # Initialize wandb logger - setup_output_directory already handled directory organization
+        # Initialize wandb logger with the unique run directory
+        # Lightning will automatically handle rank 0 only logging
         wandb_logger = WandbLogger(
             project=args.project_name,
             name=args.name,
             save_dir=args.output_dir,
             log_model=False,
         )
+        
+        # Log the wandb run info if available (only from rank 0)
+        if local_rank == 0 and wandb.run is not None:
+            print(f"WandB run: {wandb.run.name} (ID: {wandb.run.id})")
+            if hasattr(wandb.run, 'sweep_id') and wandb.run.sweep_id:
+                print(f"Sweep ID: {wandb.run.sweep_id}")
+            print(f"=" * 80)
         
         return wandb_logger
     else:
@@ -80,7 +111,12 @@ def create_trainer(args, callbacks, logger_instance):
     
     # Configure strategy for distributed training
     if torch.cuda.device_count() > 1:
-        strategy = "ddp"
+        # Use DDP with find_unused_parameters=False for better performance
+        # Explicitly set replace_sampler_ddp=True to ensure DistributedSampler is added
+        strategy = DDPStrategy(
+            find_unused_parameters=False,
+        )
+        logger.info("Using DDPStrategy with replace_sampler_ddp=True")
     else:
         strategy = "auto"
     
@@ -136,11 +172,15 @@ def main():
     # Parse arguments using existing function (now includes Lightning args)
     args = parse_refinement_arguments()
     
-    # Setup logging and random seeds
+    # Create logger FIRST (this may update args.output_dir for sweep runs)
+    # This must happen before any other components that use output_dir
+    logger_instance = create_logger(args)
+    
+    # Setup logging and random seeds AFTER logger updates output_dir
     setup_logging(args.output_dir)
     setup_random_seeds(args.seed)
     
-    # Create data module
+    # Create data module AFTER logger updates output_dir
     data_module = SRODataModule(
         data_dir=args.data_dir,
         predictions_dir=args.predictions_dir,
@@ -154,16 +194,13 @@ def main():
         pin_memory=True,
     )
     
-    # Create logger first (this may update args.output_dir)
-    logger_instance = create_logger(args)
-    
     # Create callbacks after logger updates output_dir
     callbacks = create_callbacks(args)
     
     # Save configuration AFTER logger creates run directory
-    if os.environ.get("LOCAL_RANK") == 0:
-        config_path = save_config_to_json(args, args.output_dir)
-        logger.info(f"Configuration saved to {config_path}")
+    # TODO: might need to restore to LOCAL RANK/GLOBAL RANK = 0
+    config_path = save_config_to_json(args, args.output_dir)
+    logger.info(f"Configuration saved to {config_path}")
     
     # Create model
     model = SROLightningModule(
@@ -220,21 +257,40 @@ def main():
     logger.info("Starting training...")
     trainer.fit(model, data_module)
     
-    # Test model
-    logger.info("Starting testing...")
-    trainer.test(model, data_module)
+    # Run evaluation on best checkpoint
+    best_checkpoint_path = trainer.checkpoint_callback.best_model_path
+    logger.info(f"Best checkpoint: {best_checkpoint_path}")
     
-    # Save final model
-    if os.environ.get("LOCAL_RANK") == 0:
-        final_model_path = os.path.join(args.output_dir, "final_model.ckpt")
-        trainer.save_checkpoint(final_model_path)
-        logger.info(f"Final model saved to {final_model_path}")
+    logger.info("Starting evaluation...")
+    # Only run evaluation on rank 0 to avoid duplicate execution in DDP
+    if trainer.global_rank == 0:
+        try:
+            test_results = run_evaluation(
+                checkpoint_path=best_checkpoint_path,
+                data_module=data_module,
+                wandb_logger=logger_instance,
+                output_dir=args.output_dir,
+                device="cuda:0" if torch.cuda.is_available() else "cpu",
+                limit_test_batches=args.limit_test_batches if hasattr(args, 'limit_test_batches') else None,
+            )
+            logger.info("Evaluation completed successfully!")
+        except Exception as e:
+            logger.error(f"Error during evaluation: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
+    
+    # Save final model: TODO: might need to restore to LOCAL RANK/GLOBAL RANK = 0
+    final_model_path = os.path.join(args.output_dir, "final_model.ckpt")
+    trainer.save_checkpoint(final_model_path)
+    logger.info(f"Final model saved to {final_model_path}")
     
     logger.info("Training completed!")
 
     # Teardown and cleanup
-    data_module.teardown()
-    trainer.teardown()
+    if hasattr(data_module, 'teardown'):
+        data_module.teardown('fit')
+    if hasattr(trainer, 'teardown'):
+        trainer.teardown('fit')
 
 
 if __name__ == "__main__":

@@ -10,8 +10,8 @@ beta1: 0.9
 beta2: 0.999
 warmup_epochs: 0.0
 num_epochs: 1
-gradient_acc_steps: 5 # change in full
-logging_frequency: 3 # change in full
+gradient_acc_steps: 3 # change in full
+logging_frequency: 1 # change in full
 train_crop: 256
 val_crop: 1024
 

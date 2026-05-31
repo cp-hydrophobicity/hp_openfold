@@ -1,27 +1,58 @@
-program: run_refinement_model.py
+command:
+  - ${env}
+  - bash
+  - ${program}
+  - ${args}
+program: train_sro_lightning_ddp_wrapper.sh
 method: bayes
+entity: sorins_charlatans
+project: SRO_Train_Attention_30k_pH_7.4
 metric:
-  name: epoch/val/rmsd
+  name: val/loss
   goal: minimize
 
 parameters:
+  # --- Fixed paths and settings ---
+  use_wandb:
+    value: true
+  data_dir:
+    value: "/gpfs/data/rsingh47/hp_protein_folding/protein_folding/output/sro_datasets/ph7.4_30000"
+  output_dir:
+    value: "/gpfs/data/rsingh47/hp_protein_folding/protein_folding/output/refinement_model/architecture_sweep"
+  predictions_dir:
+    value: "/gpfs/data/rsingh47/hp_protein_folding/protein_folding/output/predictions"
+  seed:
+    value: 42
+
+  # --- Fixed System Settings ---
+  pH:
+    value: 7.4
+  temperature:
+    value: 310.0
+
+  # --- Lightning specific ---
+  use_mixed_precision:
+    value: false
+  early_stopping_patience:
+    value: 0
+
   # --- Architecture (fixed) ---
   c_hidden_mul:
     value: 64
   c_hidden_att:
     value: 32
   no_heads_pair:
-    value: 2
+    value: 4
   transition_n:
     value: 1
   num_cycles:
     value: 1
   dropout_rate:
-    value: 0.1
+    value: 0.2
   no_attention:
     value: false
   initialize_triangle_prior:
-    value: false
+    values: [true, false]
   no_film:
     value: false
   train_without_forces:
@@ -29,11 +60,11 @@ parameters:
 
   # --- Training HPs (swept) ---
   learning_rate:
-    min: 1e-5
-    max: 5e-4
+    min: 0.000001
+    max: 0.001
   weight_decay:
-    min: 1e-5
-    max: 5e-4
+    min: 0.000001
+    max: 0.0005
   batch_size:
     value: 2
   max_grad_norm:
@@ -47,29 +78,13 @@ parameters:
   num_epochs:
     value: 4
   gradient_acc_steps:
-    values: [10, 30, 50]
+    values: [30, 60, 120]
+  logging_frequency:
+    value: 15
   train_crop:
     value: 256
   val_crop:
     value: 1024
-  
-  # --- Fixed paths and settings ---
-  predictions_dir:
-    value: "/gpfs/data/rsingh47/hp_protein_folding/protein_folding/output/predictions"
-  data_dir:
-    value: "/gpfs/data/rsingh47/hp_protein_folding/protein_folding/output/sro_datasets/ph7.4_30000"
-  output_dir:
-    value: "/gpfs/data/rsingh47/hp_protein_folding/protein_folding/output/refinement_model/architecture_sweep"
-  pH:
-    value: 7.4
-  use_wandb:
-    value: true
-  use_slurm:
-    value: true
-  project_name:
-    value: "SRO_Architecture_Sweep"
-  seed:
-    value: 42
 
   # --- Loss Weights (fixed here) ---
   fape_weight:

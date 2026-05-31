@@ -23,7 +23,6 @@ from openfold.model.sro.loss import RefinementLoss
 from openfold.model.structure_module import StructureModule
 from openfold.model.sro.metrics import calculate_ca_rmsd, calculate_atom14_rmsd
 from openfold.model.sro.core import load_structure_auxillary_modules
-
 from sro_utils import (
     parse_refinement_arguments, 
     setup_random_seeds, 

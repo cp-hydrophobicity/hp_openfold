@@ -1,11 +1,12 @@
 import os
 import pytorch_lightning as pl
 from torch.utils.data import DataLoader
+from torch.utils.data.distributed import DistributedSampler
 import logging
 from typing import Dict, Optional, List
+import torch.distributed as dist
 
-from openfold.model.sro.data import create_data_loaders, build_dataset
-from sro_utils import get_all_loaders
+from openfold.model.sro.data import build_dataset, ProteinDataCollator
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +53,9 @@ class SRODataModule(pl.LightningDataModule):
         self.max_samples_per_protein = max_samples_per_protein
         self.max_sequence_length = max_sequence_length
         
+        # Feature keys for data collation
+        self.feature_keys = ["pair", "single", "ground_truth_atom_positions", "aatype", "residue_index"]
+        
         # Will be populated in setup()
         self.datasets = None
         self.data_loaders = None
@@ -91,66 +95,83 @@ class SRODataModule(pl.LightningDataModule):
         
         args = MockArgs(self)
         
-        # Use existing data loading functions
+        # Create datasets only - let Lightning create dataloaders with proper DistributedSampler
         try:
-            # First try the newer get_all_loaders function
-            prefetch_factor = 2
-            datasets, data_loaders = get_all_loaders(args, logger, self.num_workers, self.pin_memory, prefetch_factor)
-            self.datasets = datasets
-            self.data_loaders = data_loaders
-            logger.info("Successfully loaded data using get_all_loaders")
+            logger.info("Creating datasets...")
+            self.datasets = build_dataset(
+                predictions_dir=args.predictions_dir,
+                pH=args.pH,
+                output_dir=args.output_dir,
+                data_dir=args.data_dir,
+                filter_proteins=args.filter_proteins,
+                max_samples_per_protein=args.max_samples_per_protein,
+                max_sequence_length=args.max_sequence_length,
+            )
+            logger.info(f"Successfully created datasets: {list(self.datasets.keys())}")
         except Exception as e:
-            logger.error(f"get_all_loaders failed: {e}")
+            logger.error(f"Dataset creation failed: {e}")
             raise e
     
     def train_dataloader(self):
-        """Return training dataloader."""
-        if self.data_loaders is not None:
-            return self.data_loaders['train']
-        elif self.datasets is not None:
-            return DataLoader(
-                self.datasets['train'],
-                batch_size=self.batch_size,
-                shuffle=True,
-                num_workers=self.num_workers,
-                pin_memory=self.pin_memory,
-                persistent_workers=True,
-                prefetch_factor=2,
-            )
-        else:
+        """Return training dataloader with proper distributed sampling."""
+        if self.datasets is None:
             raise RuntimeError("Data not setup. Call setup() first.")
+        
+        collator = ProteinDataCollator(feature_keys=self.feature_keys, crop=self.train_crop)
+        
+        return DataLoader(
+            self.datasets['train'],
+            batch_size=self.batch_size,
+            shuffle=True,
+            num_workers=self.num_workers,
+            pin_memory=self.pin_memory,
+            persistent_workers=True if self.num_workers > 0 else False,
+            prefetch_factor=2 if self.num_workers > 0 else None,
+            collate_fn=collator,
+            drop_last=True,
+        )
     
     def val_dataloader(self):
         """Return validation dataloader."""
-        if self.data_loaders is not None:
-            return self.data_loaders['val']
-        elif self.datasets is not None:
-            return DataLoader(
-                self.datasets['val'],
-                batch_size=self.batch_size,
-                shuffle=False,
-                num_workers=self.num_workers,
-                pin_memory=self.pin_memory,
-                persistent_workers=True,
-                prefetch_factor=2,
-            )
-        else:
+        if self.datasets is None:
             raise RuntimeError("Data not setup. Call setup() first.")
+        
+        collator = ProteinDataCollator(
+            feature_keys=self.feature_keys,
+            crop=self.val_crop
+        )
+        
+        return DataLoader(
+            self.datasets['val'],
+            batch_size=1,  # Batch size 1 for validation to handle large proteins
+            shuffle=False,
+            num_workers=self.num_workers,
+            pin_memory=self.pin_memory,
+            persistent_workers=True if self.num_workers > 0 else False,
+            prefetch_factor=2 if self.num_workers > 0 else None,
+            collate_fn=collator,
+            drop_last=False,
+        )
     
     def test_dataloader(self):
         """Return test dataloader."""
-        if self.data_loaders is not None:
-            return self.data_loaders['test']
-        elif self.datasets is not None:
-            return DataLoader(
-                self.datasets['test'],
-                batch_size=self.batch_size,
-                shuffle=False,
-                num_workers=self.num_workers,
-                pin_memory=self.pin_memory,
-                persistent_workers=True,
-                prefetch_factor=2,
-            )
-        else:
+        if self.datasets is None:
             raise RuntimeError("Data not setup. Call setup() first.")
+        
+        collator = ProteinDataCollator(
+            feature_keys=self.feature_keys,
+            crop=self.val_crop
+        )
+        
+        return DataLoader(
+            self.datasets['test'],
+            batch_size=1,  # Batch size 1 for test to handle large proteins
+            shuffle=False,
+            num_workers=self.num_workers,
+            pin_memory=self.pin_memory,
+            persistent_workers=True if self.num_workers > 0 else False,
+            prefetch_factor=2 if self.num_workers > 0 else None,
+            collate_fn=collator,
+            drop_last=False,
+        )
     

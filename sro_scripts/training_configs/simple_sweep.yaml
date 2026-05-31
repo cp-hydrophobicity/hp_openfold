@@ -1,0 +1,113 @@
+command:
+  - ${env}
+  - bash
+  - ${program}
+  - ${args}
+program: train_sro_lightning_ddp_wrapper.sh
+method: grid
+entity: sorins_charlatans
+project: SRO_Lightning_Simple_Sweep_5
+metric:
+  name: val/loss
+  goal: minimize
+
+parameters:
+  # Logging
+  use_wandb:
+    value: true
+  data_dir:
+    value: "/gpfs/data/rsingh47/hp_protein_folding/protein_folding/output/sro_datasets/ph7.4_30000"
+  output_dir:
+    value: "/gpfs/data/rsingh47/hp_protein_folding/protein_folding/output/refinement_model/sweep_test_2"
+  predictions_dir:
+    value: "/gpfs/data/rsingh47/hp_protein_folding/protein_folding/output/predictions"
+  seed:
+    value: 42
+
+  # Fixed parameters
+  learning_rate:
+    value: 1e-2
+  weight_decay:
+    value: 5e-4
+  batch_size:
+    value: 2
+  max_grad_norm:
+    value: 0.1
+  beta1:
+    value: 0.9
+  beta2:
+    value: 0.999
+  warmup_epochs:
+    value: 0.0
+  num_epochs:
+    value: 1
+  gradient_acc_steps:
+    value: 3
+  logging_frequency:
+    value: 1
+  train_crop:
+    value: 256
+  val_crop:
+    value: 1024
+  
+  # Sweep parameters - just 2 combinations
+  c_hidden_mul:
+    values: [64, 128]
+  
+  # Fixed architecture parameters
+  c_hidden_att:
+    value: 32
+  no_heads_pair:
+    value: 2
+  transition_n:
+    value: 1
+  num_cycles:
+    value: 1
+  dropout_rate:
+    value: 0.1
+  no_attention:
+    value: false
+  initialize_triangle_prior:
+    value: false
+  no_film:
+    value: false
+  train_without_forces:
+    value: false
+  
+  # System Settings
+  temperature:
+    value: 310.0
+  pH:
+    value: 7.4
+  
+  # Lightning specific
+  use_mixed_precision:
+    value: false
+  early_stopping_patience:
+    value: 0
+  
+  # Loss weights
+  fape_weight:
+    value: 1.0
+  supervised_chi_weight:
+    value: 1.0
+  violation_weight:
+    value: 1.0
+  distogram_weight:
+    value: 0.03
+  plddt_weight:
+    value: 0.03
+  rmsd_weight:
+    value: 0.02
+  
+  # Dev/test limits
+  fast_dev_run:
+    value: false
+  limit_train_batches:
+    value: 60
+  limit_val_batches:
+    value: 5
+  limit_test_batches:
+    value: 5
+  max_epochs_dry_run:
+    value: 1

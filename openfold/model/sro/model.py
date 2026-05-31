@@ -99,171 +99,160 @@ def backprop_energy_gradient(structure_module: nn.Module,
     Returns:
         Dictionary of gradients w.r.t each embedding
     """
-
-    # turn on gradients for structure module temporarily, reset at end
-    original_requires_grad = {}
-    for param in structure_module.parameters():
-        original_requires_grad[param] = param.requires_grad 
-        param.requires_grad = True
     
-    try:
-        with torch.enable_grad():
-            # Debug: Check if gradients are actually enabled
-            logger.info(f"torch.is_grad_enabled(): {torch.is_grad_enabled()}")
-            logger.info(f"structure_module.training: {structure_module.training}")
-            
-            embeddings_copy = {}
-            for key in embeddings:
-                embeddings_copy[key] = embeddings[key].clone().detach().requires_grad_(True)
-                logger.info(f"embeddings_copy[{key}].requires_grad: {embeddings_copy[key].requires_grad}")
-                logger.info(f"embeddings_copy[{key}].is_leaf: {embeddings_copy[key].is_leaf}")
-            
-            # Forward pass through structure module
-            output = structure_module(embeddings_copy, feats["aatype"],
-                        mask=feats["seq_mask"].to(dtype=embeddings_copy["single"].dtype),
-                        inplace_safe=False)
-            positions = output['positions']
-            
-            # Debug: Check positions tensor after forward pass
-            logger.info(f"After forward pass - positions.requires_grad: {positions.requires_grad}")
-            logger.info(f"After forward pass - positions.grad_fn: {positions.grad_fn}")
-            logger.info(f"After forward pass - positions.is_leaf: {positions.is_leaf}")
-            
-            from openfold.utils.feats import atom14_to_atom37
-            atom_positions = atom14_to_atom37(positions[-1], feats)
-            
-            if external_grad is None:
-                import tempfile
-                import os
-                from openfold.np import protein, residue_constants
-                from openfold.utils.md.energy_utils import calculate_energy
-                
-                if output_dir is not None:
-                    temp_dir = os.path.join(output_dir, 'energy_gradient_temp')
-                    os.makedirs(temp_dir, exist_ok=True)
-                    temp_dir_context = tempfile.TemporaryDirectory(dir=temp_dir)
-                else:
-                    temp_dir_context = tempfile.TemporaryDirectory(dir=os.getcwd())
-                    
-                with temp_dir_context as temp_dir:
-                    atom_positions_np = atom_positions.detach().cpu().numpy()
-                    if atom_positions_np.ndim > 3:  # If has batch dimension
-                        atom_positions_np = atom_positions_np[0]
-                    
-                    # Convert feature tensors to numpy and remove batch dimensions
-                    aatype = feats['aatype'].cpu().numpy()
-                    if aatype.ndim > 1:
-                        aatype = aatype[0]
-                    
-                    residue_index = feats['residue_index'].cpu().numpy()
-                    if residue_index.ndim > 1:
-                        residue_index = residue_index[0]
-                    
-                    # Create atom mask with numpy - ensures type compatibility
-                    b_factors = np.zeros_like(atom_positions_np[..., 0], dtype=np.float32)
-                    
-                    atom_mask = feats['atom37_atom_exists'].cpu().numpy()
-                    
-                    # Create protein object
-                    protein_obj = protein.Protein(
-                        atom_positions=atom_positions_np,
-                        atom_mask=atom_mask,
-                        aatype=aatype,
-                        residue_index=residue_index,
-                        b_factors=b_factors,
-                        chain_index=np.zeros_like(residue_index)
-                    )
-                    
-                    # Calculate energy and forces
-                    energy_result = calculate_energy(
-                        protein_obj, 
-                        output_dir=temp_dir,
-                        use_gpu=torch.cuda.is_available(),
-                        add_solvent=True,
-                        pH=pH,
-                        detailed=False,
-                        get_forces=True
-                    )
-                    
-                    # Get forces and convert to tensor
-                    forces_np = energy_result['forces']
-                    external_grad = torch.tensor(forces_np, device=positions.device, dtype=positions.dtype)
+    structure_module.eval()
 
-                    external_grad = convert_forces_to_a14(external_grad, protein.to_pdb(protein_obj))
-                    
-                    del protein_obj, energy_result, forces_np, atom_positions_np, b_factors, aatype, residue_index, atom_mask
-                    
-                    import gc
-                    gc.collect()
-                    if torch.cuda.is_available():
-                        torch.cuda.empty_cache()
-
-            # artificially pad gradient to match positions shape
-            # positions contains positions for every step of the structure module -- we only want to backpropagate the last step
-            full_grad = torch.zeros_like(positions)
-            if external_grad is not None:
-                full_grad[-1] = external_grad
-            else:
-                # If no external gradient is provided, create a dummy gradient that requires grad
-                full_grad[-1] = torch.ones_like(positions[-1], requires_grad=True)
-            
-            # Backward pass
-            # log_memory("Before backward pass")
-            
-            # Debug: Print tensor gradient status before backward pass
-            logger.info("=== GRADIENT DEBUG INFO ===")
-            logger.info(f"positions.requires_grad: {positions.requires_grad}")
-            logger.info(f"positions.grad_fn: {positions.grad_fn}")
-            logger.info(f"positions.is_leaf: {positions.is_leaf}")
-            logger.info(f"positions.shape: {positions.shape}")
-            
-            logger.info(f"full_grad.requires_grad: {full_grad.requires_grad}")
-            logger.info(f"full_grad.grad_fn: {full_grad.grad_fn}")
-            logger.info(f"full_grad.is_leaf: {full_grad.is_leaf}")
-            logger.info(f"full_grad.shape: {full_grad.shape}")
-            
-            if external_grad is not None:
-                logger.info(f"external_grad.requires_grad: {external_grad.requires_grad}")
-                logger.info(f"external_grad.grad_fn: {external_grad.grad_fn}")
-                logger.info(f"external_grad.is_leaf: {external_grad.is_leaf}")
-                logger.info(f"external_grad.shape: {external_grad.shape}")
-            else:
-                logger.info("external_grad is None")
-            
-            # Check embeddings_copy grad requirements
-            for key, emb in embeddings_copy.items():
-                logger.info(f"embeddings_copy[{key}].requires_grad: {emb.requires_grad}")
-                logger.info(f"embeddings_copy[{key}].grad_fn: {emb.grad_fn}")
-                logger.info(f"embeddings_copy[{key}].is_leaf: {emb.is_leaf}")
-            
-            logger.info("=== END GRADIENT DEBUG INFO ===")
-            
-            positions.backward(gradient=full_grad)
-            # log_memory("After backward pass")
-            
-            # Extract gradients before cleaning up
-            gradients = {}
-            for key in embeddings_copy:
-                if embeddings_copy[key].grad is not None:
-                    gradients[key] = embeddings_copy[key].grad.clone()
-                else:
-                    # If no gradient is computed, create a zero tensor with requires_grad=True
-                    gradients[key] = torch.zeros_like(embeddings_copy[key], requires_grad=True)
-            
-            del embeddings_copy, output, positions, atom_positions, full_grad
-            if 'external_grad' in locals():
-                del external_grad
-            
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+    with torch.enable_grad():
+        # Debug: Check if gradients are actually enabled
+        # logger.info(f"torch.is_grad_enabled(): {torch.is_grad_enabled()}")
+        # logger.info(f"structure_module.training: {structure_module.training}")
         
-        # log_memory("End of backprop_energy_gradient")
-        return gradients
+        embeddings_copy = {}
+        for key in embeddings:
+            embeddings_copy[key] = embeddings[key].clone().detach().requires_grad_(True)
+            # logger.info(f"embeddings_copy[{key}].requires_grad: {embeddings_copy[key].requires_grad}")
+            # logger.info(f"embeddings_copy[{key}].is_leaf: {embeddings_copy[key].is_leaf}")
+        
+        # Forward pass through structure module
+        output = structure_module(embeddings_copy, feats["aatype"],
+                    mask=feats["seq_mask"].to(dtype=embeddings_copy["single"].dtype),
+                    inplace_safe=False)
+        positions = output['positions']
+        
+        # Debug: Check positions tensor after forward pass
+        # logger.info(f"After forward pass - positions.requires_grad: {positions.requires_grad}")
+        # logger.info(f"After forward pass - positions.grad_fn: {positions.grad_fn}")
+        # logger.info(f"After forward pass - positions.is_leaf: {positions.is_leaf}")
+        
+        from openfold.utils.feats import atom14_to_atom37
+        atom_positions = atom14_to_atom37(positions[-1], feats)
+        
+        if external_grad is None:
+            import tempfile
+            import os
+            from openfold.np import protein, residue_constants
+            from openfold.utils.md.energy_utils import calculate_energy
+            
+            if output_dir is not None:
+                temp_dir = os.path.join(output_dir, 'energy_gradient_temp')
+                os.makedirs(temp_dir, exist_ok=True)
+                temp_dir_context = tempfile.TemporaryDirectory(dir=temp_dir)
+            else:
+                temp_dir_context = tempfile.TemporaryDirectory(dir=os.getcwd())
+                
+            with temp_dir_context as temp_dir:
+                atom_positions_np = atom_positions.detach().cpu().numpy()
+                if atom_positions_np.ndim > 3:  # If has batch dimension
+                    atom_positions_np = atom_positions_np[0]
+                
+                # Convert feature tensors to numpy and remove batch dimensions
+                aatype = feats['aatype'].cpu().numpy()
+                if aatype.ndim > 1:
+                    aatype = aatype[0]
+                
+                residue_index = feats['residue_index'].cpu().numpy()
+                if residue_index.ndim > 1:
+                    residue_index = residue_index[0]
+                
+                # Create atom mask with numpy - ensures type compatibility
+                b_factors = np.zeros_like(atom_positions_np[..., 0], dtype=np.float32)
+                
+                atom_mask = feats['atom37_atom_exists'].cpu().numpy()
+                
+                # Create protein object
+                protein_obj = protein.Protein(
+                    atom_positions=atom_positions_np,
+                    atom_mask=atom_mask,
+                    aatype=aatype,
+                    residue_index=residue_index,
+                    b_factors=b_factors,
+                    chain_index=np.zeros_like(residue_index)
+                )
+                
+                # Calculate energy and forces
+                energy_result = calculate_energy(
+                    protein_obj, 
+                    output_dir=temp_dir,
+                    use_gpu=torch.cuda.is_available(),
+                    add_solvent=True,
+                    pH=pH,
+                    detailed=False,
+                    get_forces=True
+                )
+                
+                # Get forces and convert to tensor
+                forces_np = energy_result['forces']
+                external_grad = torch.tensor(forces_np, device=positions.device, dtype=positions.dtype)
+
+                external_grad = convert_forces_to_a14(external_grad, protein.to_pdb(protein_obj))
+                
+                del protein_obj, energy_result, forces_np, atom_positions_np, b_factors, aatype, residue_index, atom_mask
+                
+                import gc
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+
+        # artificially pad gradient to match positions shape
+        # positions contains positions for every step of the structure module -- we only want to backpropagate the last step
+        full_grad = torch.zeros_like(positions)
+        if external_grad is not None:
+            full_grad[-1] = external_grad
+        else:
+            # If no external gradient is provided, create a dummy gradient that requires grad
+            full_grad[-1] = torch.ones_like(positions[-1], requires_grad=True)
+        
+        # Backward pass
+        # log_memory("Before backward pass")
+        
+        # Debug: Print tensor gradient status before backward pass
+        # logger.info("=== GRADIENT DEBUG INFO ===")
+        # logger.info(f"positions.requires_grad: {positions.requires_grad}")
+        # logger.info(f"positions.grad_fn: {positions.grad_fn}")
+        # logger.info(f"positions.is_leaf: {positions.is_leaf}")
+        # logger.info(f"positions.shape: {positions.shape}")
+        
+        # logger.info(f"full_grad.requires_grad: {full_grad.requires_grad}")
+        # logger.info(f"full_grad.grad_fn: {full_grad.grad_fn}")
+        # logger.info(f"full_grad.is_leaf: {full_grad.is_leaf}")
+        # logger.info(f"full_grad.shape: {full_grad.shape}")
+        
+        # if external_grad is not None:
+        #     logger.info(f"external_grad.requires_grad: {external_grad.requires_grad}")
+        #     logger.info(f"external_grad.grad_fn: {external_grad.grad_fn}")
+        #     logger.info(f"external_grad.is_leaf: {external_grad.is_leaf}")
+        #     logger.info(f"external_grad.shape: {external_grad.shape}")
+        # else:
+        #     logger.info("external_grad is None")
+        
+        # # Check embeddings_copy grad requirements
+        # for key, emb in embeddings_copy.items():
+        #     logger.info(f"embeddings_copy[{key}].requires_grad: {emb.requires_grad}")
+        #     logger.info(f"embeddings_copy[{key}].grad_fn: {emb.grad_fn}")
+        #     logger.info(f"embeddings_copy[{key}].is_leaf: {emb.is_leaf}")
+        
+        # logger.info("=== END GRADIENT DEBUG INFO ===")
+        
+        positions.backward(gradient=full_grad)
+        # log_memory("After backward pass")
+        
+        # Extract gradients before cleaning up
+        gradients = {}
+        for key in embeddings_copy:
+            if embeddings_copy[key].grad is not None:
+                gradients[key] = embeddings_copy[key].grad.clone()
+            else:
+                gradients[key] = torch.zeros_like(embeddings_copy[key], requires_grad=True)
+        
+        del embeddings_copy, output, positions, atom_positions, full_grad
+        if 'external_grad' in locals():
+            del external_grad
+        
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
     
-    finally:
-        # Always restore original requires_grad states, no matter what happens
-        for param, original_state in original_requires_grad.items():
-            param.requires_grad = original_state
+    # log_memory("End of backprop_energy_gradient")
+    return gradients
 
 
 class GradientConditioner(nn.Module):
@@ -822,6 +811,11 @@ class SubspaceRelaxationOperator(nn.Module):
         )
         new_pair_embed = curr_pair_embed + pair_delta
         curr_pair_embed = new_pair_embed
+        
+        # # Clean up intermediate variables
+        # del pair_delta, pair_grad, initial_output, embeddings
+        # if torch.cuda.is_available():
+        #     torch.cuda.empty_cache()
     
         # Final forward pass through structure module
         final_output = None
@@ -842,6 +836,7 @@ class SubspaceRelaxationOperator(nn.Module):
             'pair': curr_pair_embed,
             'single': curr_single_embed,
             'positions': final_output['positions'],
+            'initial_atom_positions': prev_positions[-1],
             'final_atom_positions': final_output['positions'][-1],
             'sm': final_output,
             'status': True

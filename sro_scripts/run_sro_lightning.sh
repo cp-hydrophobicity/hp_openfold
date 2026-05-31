@@ -4,7 +4,7 @@
 #SBATCH --output=/gpfs/data/rsingh47/hp_protein_folding/protein_folding/output/logs/testing_logs/sro_lightning_%j.out
 #SBATCH --error=/gpfs/data/rsingh47/hp_protein_folding/protein_folding/output/logs/testing_logs/sro_lightning_%j.err
 
-#SBATCH -p gpu
+#SBATCH -p 3090-gcondo
 #SBATCH --gres=gpu:2
 #SBATCH -N 1
 #SBATCH --ntasks-per-node=2
@@ -13,14 +13,14 @@
 #SBATCH -t 24:00:00
 
 # Set environment variables for distributed training
-export CUDA_VISIBLE_DEVICES=0,1,2,3
+export CUDA_VISIBLE_DEVICES=0,1
 export MASTER_ADDR=$(hostname)
 export MASTER_PORT=12355
 export PYTHONPATH="/gpfs/data/rsingh47/hp_protein_folding/protein_folding/openfold/"
 
 # Configuration file (can be overridden by command line)
 CONFIG_FILE="training_configs/test_single_run.yaml"
-OUTPUT_DIR="/gpfs/data/rsingh47/hp_protein_folding/protein_folding/output/refinement_model/lightning_test3"
+OUTPUT_DIR="/gpfs/data/rsingh47/hp_protein_folding/protein_folding/output/refinement_model/lightning_test4"
 PREDICTIONS_DIR="/gpfs/data/rsingh47/hp_protein_folding/protein_folding/output/predictions"
 DATA_DIR="/gpfs/data/rsingh47/hp_protein_folding/protein_folding/output/sro_datasets/ph7.4_30000"
 

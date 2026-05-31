@@ -142,7 +142,6 @@ class SROLightningModule(pl.LightningModule):
         
     def forward(self, batch):
         """Forward pass through the refinement model."""
-        
         return self.refinement_model(
             pair_embed=batch['pair'],
             single_embed=batch['single'],
@@ -156,6 +155,28 @@ class SROLightningModule(pl.LightningModule):
             return_final_positions=True,
             return_auxiliary_heads=True,
         )
+
+    def _process_per_sequence_metrics(self, batch, output, loss, breakdown, initial_rmsd, refined_rmsd, improvement):
+        batch_size = batch['seq_length'].size(0) if 'seq_length' in batch else 1
+        per_sequence_metrics = []
+        
+        for i in range(batch_size):
+            if 'checkpoint_number' not in batch or 'seq_length' not in batch:
+                logger.warning('Checkpoint number or sequence length not found in batch. Skipping per sequence metrics.')
+                continue
+            
+            seq_metrics = {
+                'rmsd': refined_rmsd[i].item(),
+                'improvement': improvement[i].item(),
+                'initial_rmsd': initial_rmsd[i].item(),
+                'refined_rmsd': refined_rmsd[i].item(),
+                'checkpoint_number': batch['checkpoint_number'][i].item(),
+                'seq_length': batch['seq_length'][i].item(),
+            }
+            
+            per_sequence_metrics.append(seq_metrics)
+        
+        return per_sequence_metrics
     
     def _shared_step(self, batch, stage: str):
         """Shared logic for training and validation steps."""
@@ -169,13 +190,10 @@ class SROLightningModule(pl.LightningModule):
             
         # Forward pass
         output = self(batch)
-        
-        # Compute loss
         loss, breakdown = self.loss_fn(output, batch, _return_breakdown=True)
         
-        # Calculate metrics using correct ground truth positions
-        metrics = {}
 
+        metrics = {}
         refined_rmsd = calculate_ca_rmsd(
             output['final_atom_positions'], 
             batch['atom14_gt_positions'],
@@ -183,62 +201,31 @@ class SROLightningModule(pl.LightningModule):
         )
         metrics['rmsd'] = refined_rmsd.mean() if refined_rmsd.dim() > 0 else refined_rmsd
             
-        # Only do per-sequence processing for validation and test
         if stage in ["val", "test"]:
-            print("Line 188: ", output.keys())
-            initial_positions = output['sm']['positions'][-1]  # Last layer positions
+            initial_positions = output['initial_atom_positions']
             initial_rmsd = calculate_ca_rmsd(
                 initial_positions,
                 batch['atom14_gt_positions'],
                 batch['atom14_atom_exists']
             )
             improvement = initial_rmsd - refined_rmsd
-            metrics['initial_rmsd'] = initial_rmsd.mean() if initial_rmsd.dim() > 0 else initial_rmsd
-            metrics['improvement'] = improvement.mean() if improvement.dim() > 0 else improvement
+            metrics['initial_rmsd'] = initial_rmsd.mean()
+            metrics['improvement'] = improvement.mean()
         
-            print("Line 199: ", improvement, refined_rmsd, initial_rmsd)
             per_sequence_metrics = self._process_per_sequence_metrics(
                 batch, output, loss, breakdown, initial_rmsd, refined_rmsd, improvement
             )
-            print("Line 202: ", per_sequence_metrics)
             metrics['per_sequence_data'] = per_sequence_metrics
 
         # Add loss breakdown to metrics
         metrics.update(breakdown)
         metrics['loss'] = loss
-        print("Line 207: ", metrics.keys())
-        print("Line 208: ", metrics)
+
+        tensor_tree_map(lambda x: x.detach().cpu(), batch)
         
         return loss, metrics
     
-    def _process_per_sequence_metrics(self, batch, output, loss, breakdown, initial_rmsd, refined_rmsd, improvement):
-        """Helper function to process metrics per sequence in batch."""
-        batch_size = batch['seq_length'].size(0) if 'seq_length' in batch else 1
-        per_sequence_metrics = []
-        
-        for i in range(batch_size):
-            seq_metrics = {
-                'rmsd': refined_rmsd[i].item() if refined_rmsd.dim() > 0 else refined_rmsd.item(),
-            }
-            
-            if 'initial_atom14_positions' in output:
-                seq_metrics['improvement'] = improvement[i].item() if improvement.dim() > 0 else improvement.item()
-                seq_metrics['initial_rmsd'] = initial_rmsd[i].item() if initial_rmsd.dim() > 0 else initial_rmsd.item()
-            
-            if 'checkpoint_number' in batch:
-                seq_metrics['checkpoint_number'] = batch['checkpoint_number'][i].item()
-            if 'seq_length' in batch:
-                seq_metrics['seq_length'] = batch['seq_length'][i].item()
-            
-            for key, value in breakdown.items():
-                seq_metrics[key] = value.item() / batch_size if hasattr(value, 'item') else value / batch_size
-            
-            per_sequence_metrics.append(seq_metrics)
-        
-        return per_sequence_metrics
-    
     def _bin_sequence_metrics(self, metrics_list):
-        """Helper function to bin metrics by sequence length."""
         seq_len_bins = {
             "<256": {"count": 0, "initial_rmsd": 0.0, "refined_rmsd": 0.0, "improvement": 0.0},
             "256-512": {"count": 0, "initial_rmsd": 0.0, "refined_rmsd": 0.0, "improvement": 0.0},
@@ -269,10 +256,6 @@ class SROLightningModule(pl.LightningModule):
         return seq_len_bins
     
     def training_step(self, batch, batch_idx):
-        """Training step."""
-        # Ensure correct training modes - CRITICAL: only refinement model should train
-        # self.structure_module.eval()
-        # self.aux_heads.eval() 
         self.refinement_model.structure_module.eval()
         self.refinement_model.aux_heads.eval()
         self.refinement_model.train()
@@ -285,44 +268,51 @@ class SROLightningModule(pl.LightningModule):
         loss, metrics = self._shared_step(batch, "train")
         
         batch_size = batch['seq_length'].size(0) if 'seq_length' in batch else 1
-        self.log("train/loss", loss, on_step=True, on_epoch=True, sync_dist=True, batch_size=batch_size)
-        for key, value in metrics.items():
-            if key != 'loss':
-                # # Ensure metric is on GPU for distributed sync
-                # if isinstance(value, torch.Tensor) and value.device.type == 'cpu':
-                #     value = value.to(self.device)
-                self.log(f"train/{key}", value, on_step=True, on_epoch=True, sync_dist=True, batch_size=batch_size)
+        
+        # Log loss first
+        rank = os.getenv("LOCAL_RANK", 0)
+        # logger.info(f"Batch: {batch_idx}, Rank: {rank}, Loss: {loss.item()}")
+        # logger.info(f"Batch: {batch_idx}, Rank: {rank}, Metrics: {metrics}")
+
+        self.log("train/loss", loss, on_step=False, on_epoch=True, sync_dist=True, batch_size=batch_size)
+
+        loss_terms = ["unscaled_loss", "violation", "supervised_chi", "rmsd", "plddt_loss", "fape", "distogram"]
+        for loss_term in loss_terms:
+            value = metrics[loss_term]
+            if isinstance(value, (float, int)):
+                value = torch.tensor(value, device=self.device)
+            self.log(f"train/{loss_term}", value.float(), on_step=False, on_epoch=True, sync_dist=True, batch_size=batch_size)
         
         return loss
     
     def validation_step(self, batch, batch_idx):
-        """Validation step."""
-        # Ensure all modules are in eval mode for validation
         self.refinement_model.structure_module.eval()
         self.refinement_model.aux_heads.eval()
         self.refinement_model.eval()
         
         loss, metrics = self._shared_step(batch, "val")
         
-        # Log metrics (ensure tensors are on GPU for distributed sync)
         batch_size = batch['seq_length'].size(0) if 'seq_length' in batch else 1
         self.log("val/loss", loss, on_step=False, on_epoch=True, prog_bar=False, sync_dist=True, batch_size=batch_size)
-        for key, value in metrics.items():
-            if key not in ['loss', 'per_sequence_data']:
-                # Ensure metric is on GPU for distributed sync
-                if isinstance(value, torch.Tensor) and value.device.type == 'cpu':
-                    value = value.to(self.device)
-                self.log(f"val/{key}", value, on_step=False, on_epoch=True, sync_dist=True, batch_size=batch_size)
         
-        # Store per-sequence metrics for epoch-end binning analysis
+        # Only log scalars with sync_dist=True, sorted for consistent ordering across ranks
+        for key in sorted(metrics.keys()):
+            if key in ("per_sequence_data", "loss"):
+                continue
+            value = metrics[key]
+            if isinstance(value, (float, int)):
+                value = torch.tensor(value, device=self.device)
+            if isinstance(value, torch.Tensor) and value.dim() == 0:
+                self.log(f"val/{key}", value.float(), on_step=False, on_epoch=True, sync_dist=True, batch_size=batch_size)
+        
         if 'per_sequence_data' in metrics:
             self.val_metrics.extend(metrics['per_sequence_data'])
         
         return {"loss": loss}
     
     def on_validation_epoch_end(self):
-        """Analyze validation metrics by sequence length bins."""
         if not self.val_metrics:
+            logger.warning(f"Epoch {self.current_epoch} has no sequence-specific validation metrics.")
             return
             
         seq_len_bins = self._bin_sequence_metrics(self.val_metrics)
@@ -340,79 +330,6 @@ class SROLightningModule(pl.LightningModule):
                 self.log(f"val/{bin_name}_improvement", avg_improvement, on_epoch=True, sync_dist=True)
         
         self.val_metrics.clear()
-    
-    def test_step(self, batch, batch_idx):
-
-            self.refinement_model.structure_module.eval()
-            self.refinement_model.aux_heads.eval()
-            self.refinement_model.eval()
-            
-            # Log metrics (ensure tensors are on GPU for distributed sync)
-            batch_size = batch['seq_length'].size(0) if 'seq_length' in batch else 1
-            self.log("test/loss", loss, sync_dist=True, batch_size=batch_size, on_step=False, on_epoch=True)
-            for key, value in metrics.items():
-                if key != 'loss' and key != 'per_sequence_data':
-                    # Ensure metric is on GPU for distributed sync
-                    if isinstance(value, torch.Tensor) and value.device.type == 'cpu':
-                        value = value.to(self.device)
-                    self.log(f"test/{key}", value, sync_dist=True, batch_size=batch_size, on_step=False, on_epoch=True)
-            
-            # Store per-sequence metrics for test-end checkpoint analysis
-            if 'per_sequence_data' in metrics:
-                self.test_metrics.extend(metrics['per_sequence_data'])
-            
-            return {"loss": loss, **metrics}
-    
-    def on_test_epoch_end(self):
-        """Create checkpoint scatter plot and sequence length bins from test data."""
-        if not self.test_metrics:
-            return
-            
-        # Log sequence length binned metrics for test set
-        seq_len_bins = self._bin_sequence_metrics(self.test_metrics)
-        
-        for bin_name, bin_data in seq_len_bins.items():
-            if bin_data["count"] > 0:
-                avg_rmsd = bin_data["refined_rmsd"] / bin_data["count"]
-                avg_initial_rmsd = bin_data["initial_rmsd"] / bin_data["count"]
-                avg_improvement = bin_data["improvement"] / bin_data["count"]
-                
-                self.log(f"test/{bin_name}_count", bin_data["count"], sync_dist=True, on_epoch=True)
-                self.log(f"test/{bin_name}_rmsd", avg_rmsd, sync_dist=True, on_epoch=True)
-                self.log(f"test/{bin_name}_initial_rmsd", avg_initial_rmsd, sync_dist=True, on_epoch=True)
-                self.log(f"test/{bin_name}_improvement", avg_improvement, sync_dist=True, on_epoch=True)
-            
-        # Collect checkpoint data for scatter plot
-        checkpoint_losses = []
-        checkpoint_improvements = []
-        checkpoint_rmsds = []
-        for metrics in self.test_metrics:
-            checkpoint_num = metrics.get('checkpoint_number', -1)
-            loss = metrics.get('loss', 0.0)
-            improvement = metrics.get('improvement', 0.0)
-            rmsd = metrics.get('rmsd', 0.0)
-            if checkpoint_num >= 0:
-                checkpoint_losses.append([checkpoint_num, loss])
-                checkpoint_improvements.append([checkpoint_num, improvement])
-                checkpoint_rmsds.append([checkpoint_num, rmsd])
-        
-        # Create checkpoint scatter plot (only during testing)
-        if checkpoint_losses and hasattr(self.logger, 'experiment'):
-            
-            names = ['loss', 'improvement', 'rmsd']
-            for checkpoint_values, name in zip([checkpoint_losses, checkpoint_improvements, checkpoint_rmsds], names):
-                # Create scatter plot for metric vs checkpoint number
-                plot_data = [[int(ckpt), float(value)] for ckpt, value in checkpoint_values]
-                table = wandb.Table(data=plot_data, columns=["checkpoint", name])
-                self.logger.experiment.log({
-                    f"test/checkpoint_{name}_scatter": wandb.plot.scatter(
-                        table, "checkpoint", name, 
-                        title=f"{name.title()} by Checkpoint Number (Test Set)"
-                    )
-                })
-        
-        # Clear test metrics
-        self.test_metrics.clear()
     
     def configure_optimizers(self):
         """Configure optimizer and scheduler."""

@@ -1,42 +1,38 @@
 #!/bin/bash
-
-#SBATCH --job-name=sro_lightning_sweep
-#SBATCH --output=/gpfs/data/rsingh47/hp_protein_folding/protein_folding/output/logs/sro_sweeps/lightning_sweep_%j.out
-#SBATCH --error=/gpfs/data/rsingh47/hp_protein_folding/protein_folding/output/logs/sro_sweeps/lightning_sweep_%j.err
+#SBATCH --job-name=sro_sweep_agent
+#SBATCH --output=../../output/logs/sro_sweeps/train_attn_params_sweep_%j.out
+#SBATCH --error=../../output/logs/sro_sweeps/train_attn_params_sweep_%j.err
 
 #SBATCH -p 3090-gcondo
-#SBATCH --gres=gpu:4
+#SBATCH --gres=gpu:1
 #SBATCH -N 1
-#SBATCH -n 4
+#SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=4
-#SBATCH --mem=256G
+#SBATCH --mem=128G
 #SBATCH -t 100:00:00
 
-# Set environment variables for distributed training
-export CUDA_VISIBLE_DEVICES=0,1,2,3
-export MASTER_ADDR=$(hostname)
-export MASTER_PORT=12355
+export PYTHONPATH="/gpfs/data/rsingh47/hp_protein_folding/protein_folding/openfold/"
+export CUDA_VISIBLE_DEVICES=0
+export MASTER_ADDR=localhost
+export MASTER_PORT=29500
 
-# Navigate to script directory
-cd /users/pmahable/data/hp_protein_folding/protein_folding/openfold/sro_scripts
+which python
 
-# Default parameters
-DATA_DIR="/gpfs/data/rsingh47/hp_protein_folding/protein_folding/output/sro_datasets/ph7.4_30000"
-OUTPUT_DIR="/gpfs/data/rsingh47/hp_protein_folding/protein_folding/output/refinement_model/lightning_architecture_sweep"
-PROJECT_NAME="SRO_Lightning_Architecture_Sweep"
+# --------------------------
+# User sweep configuration
+# --------------------------
+AGENT_SWEEP_INPUT="sorins_charlatans/SRO_Train_Attention_30k_pH_7.4/l7x3mrmv"
+SWEEP_COUNT=5
 
-# Create output directory
-mkdir -p $OUTPUT_DIR
+echo "Running sweep agent with:"
+echo "  GPUs:        1 (using torchrun wrapper)"
+echo "  Sweep ID:    $AGENT_SWEEP_INPUT"
+echo "  Max runs:    $SWEEP_COUNT"
 
-# Initialize wandb sweep (run this once to get sweep ID)
-# wandb sweep training_configs/sweep_architecture_lightning.yaml
+echo "View sweep at: https://wandb.ai/$AGENT_SWEEP_INPUT"
 
-# Run sweep agent - replace SWEEP_ID with actual sweep ID from above command
-SWEEP_ID=${1:-"your_sweep_id_here"}
+# --------------------------
+# Run W&B sweep agent
+# --------------------------
 
-echo "Starting Lightning sweep agent for sweep: $SWEEP_ID"
-echo "Output directory: $OUTPUT_DIR"
-echo "Data directory: $DATA_DIR"
-
-# Run wandb agent with Lightning training
-wandb agent $SWEEP_ID --count 10
+wandb agent --count $SWEEP_COUNT $AGENT_SWEEP_INPUT

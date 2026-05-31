@@ -322,6 +322,8 @@ class ProteinDataCollator:
         checkpoint_numbers = []
         crop_ranges = []
         for sample in batch:
+            if not sample['embeddings']:
+                return {}
             if "sequence_length" in sample and sample["sequence_length"] is not None:
                 seq_len = sample["sequence_length"]
                 if self.crop and seq_len > self.crop:
@@ -613,103 +615,6 @@ class ProteinDataCollator:
         
         return result
 
-
-def get_dataloader(
-    predictions_dir: str,
-    pH: str = '5',
-    batch_size: int = 1,
-    num_workers: int = 2,
-    shuffle: bool = True,
-    filter_proteins: Optional[List[str]] = None,
-    max_samples_per_protein: Optional[int] = None,
-    cache_embeddings: bool = False,
-    cache_size: int = 100,
-    prefetch_factor: int = 2,
-    distributed: bool = False,
-    world_size: Optional[int] = None,
-    rank: Optional[int] = None,
-    seed: int = 42,
-    train_split: bool = True,
-    crop: Optional[int] = 256
-) -> DataLoader:
-    """
-    Get a DataLoader for the protein refinement dataset.
-    
-    Args:
-        predictions_dir: Path to the predictions directory
-        pH: pH value to use for ground truth selection
-        batch_size: Batch size for the DataLoader
-        num_workers: Number of workers for the DataLoader
-        shuffle: Whether to shuffle the dataset
-        filter_proteins: Optional list of protein names to filter the dataset
-        max_samples_per_protein: Optional maximum number of samples to load per protein
-        cache_embeddings: Whether to cache embeddings in memory after first load
-        cache_size: Maximum number of embeddings to keep in cache
-        prefetch_factor: Number of samples to prefetch per worker
-        distributed: Whether to use distributed training
-        world_size: Number of processes participating in distributed training
-        rank: Rank of the current process
-        seed: Random seed for reproducibility
-        train_split: Whether to use the train split
-        
-    Returns:
-        DataLoader for the dataset
-    """
-    # Create dataset
-    dataset = ProteinRefinementDataset(
-        predictions_dir=predictions_dir,
-        pH=pH,
-        filter_proteins=filter_proteins,
-        max_samples_per_protein=max_samples_per_protein,
-        cache_embeddings=cache_embeddings,
-        cache_size=cache_size
-    )
-    
-    # Create data collator
-    collator = ProteinDataCollator(
-        feature_keys=["pair", "single", "ground_truth_atom_positions", "aatype", "residue_index"],
-        crop=crop if train_split else None
-    )
-    
-    # Create DataLoader with appropriate sampler
-    if distributed:
-        if rank is None or world_size is None:
-            raise ValueError("For distributed training, both rank and world_size must be provided")
-            
-        logger.info(f"Using distributed sampler with rank {rank}/{world_size}")
-        sampler = DistributedSampler(
-            dataset,
-            num_replicas=world_size,
-            rank=rank,
-            shuffle=shuffle,
-            seed=seed
-        )
-        dataloader = DataLoader(
-            dataset=dataset,
-            batch_size=batch_size,
-            sampler=sampler,
-            num_workers=num_workers,
-            collate_fn=collator,
-            prefetch_factor=prefetch_factor if num_workers > 0 else None,
-            pin_memory=True,
-            drop_last=False
-        )
-    else:
-        logger.info("Using standard sampler")
-        dataloader = DataLoader(
-            dataset=dataset,
-            batch_size=batch_size,
-            shuffle=shuffle,
-            num_workers=num_workers,
-            collate_fn=collator,
-            prefetch_factor=prefetch_factor if num_workers > 0 else None,
-            pin_memory=True,
-            drop_last=False
-        )
-    
-    return dataloader
-
-
 def create_data_loaders(
     datasets: Dict[str, Dataset],
     batch_size: int = 1,
@@ -740,7 +645,7 @@ def create_data_loaders(
     loaders = {}
     for split, dataset in datasets.items():
         shuffle = (split == "train")
-        
+
         # Create data collator
         if split == "train":
             collator = ProteinDataCollator(feature_keys=feature_keys, crop=crop)

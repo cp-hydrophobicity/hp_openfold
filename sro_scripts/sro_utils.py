@@ -171,22 +171,29 @@ def create_refinement_argument_parser():
     return parser
 
 def setup_output_directory(args):
-    base_output_dir = args.output_dir
+    """Ensure base output directory exists.
     
-    # Check if we're in a wandb sweep by looking for an active run
-    if wandb.run is not None:
-        # Use wandb run ID to create unique subdirectory for this sweep run
-        sweep_run_dir = os.path.join(base_output_dir, f"sweep_run_{wandb.run.id}")
+    Note: Sweep-specific subdirectories are created later in create_logger()
+    after wandb is initialized, since wandb.run is None at this point.
+    """
+    base_output_dir = args.output_dir
+    os.makedirs(base_output_dir, exist_ok=True)
+    return base_output_dir
+    
+    # # Check if we're in a wandb sweep by looking for an active run
+    # if wandb.run is not None:
+    #     # Use wandb run ID to create unique subdirectory for this sweep run
+    #     sweep_run_dir = os.path.join(base_output_dir, f"sweep_run_{wandb.run.id}")
         
-        # Create the directory if it doesn't exist
-        os.makedirs(sweep_run_dir, exist_ok=True)
+    #     # Create the directory if it doesn't exist
+    #     os.makedirs(sweep_run_dir, exist_ok=True)
         
-        print(f"Wandb sweep detected. Using sweep-specific output directory: {sweep_run_dir}")
-        return sweep_run_dir
-    else:
-        # Not in a sweep, use the original output directory
-        os.makedirs(base_output_dir, exist_ok=True)
-        return base_output_dir
+    #     print(f"Wandb sweep detected. Using sweep-specific output directory: {sweep_run_dir}")
+    #     return sweep_run_dir
+    # else:
+    #     # Not in a sweep, use the original output directory
+    # os.makedirs(base_output_dir, exist_ok=True)
+    # return base_output_dir
 
 def load_config_from_json(config_path: str):
     """Load config from JSON or YAML file."""
